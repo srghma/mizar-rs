@@ -448,7 +448,7 @@ impl Analyzer<'_> {
           if DOUBLE_CHECK {
             let (mut sig3, mut def3) = Default::default();
             (self.path)
-              .read_definitions(MaybeMut::None, new_prel, "def", Some(&mut sig3), &mut def3)
+              .read_definitions(MaybeMut::None, new_prel, "def", Some(&mut sig3), &mut def3, self.r.bump)
               .unwrap();
             ep.with_ctx(None, |ep| def3.visit(ep));
             assert_eq!(sig1, sig3);
@@ -482,7 +482,7 @@ impl Analyzer<'_> {
           if DOUBLE_CHECK {
             let (mut sig3, mut did3) = Default::default();
             (self.path)
-              .read_identify_regs(MaybeMut::None, new_prel, "did", Some(&mut sig3), &mut did3)
+              .read_identify_regs(MaybeMut::None, new_prel, "did", Some(&mut sig3), &mut did3, self.r.bump)
               .unwrap();
             ep.with_ctx(None, |ep| did3.visit(ep));
             assert_eq!(sig1, sig3);
@@ -516,7 +516,7 @@ impl Analyzer<'_> {
           if DOUBLE_CHECK {
             let (mut sig3, mut drd3) = Default::default();
             (self.path)
-              .read_reduction_regs(MaybeMut::None, new_prel, "drd", Some(&mut sig3), &mut drd3)
+              .read_reduction_regs(MaybeMut::None, new_prel, "drd", Some(&mut sig3), &mut drd3, self.r.bump)
               .unwrap();
             ep.with_ctx(None, |ep| drd3.visit(ep));
             assert_eq!(sig1, sig3);
@@ -551,8 +551,9 @@ impl Analyzer<'_> {
           if DOUBLE_CHECK {
             let (mut sig3, mut dpr3) = Default::default();
             (self.path)
-              .read_properties(MaybeMut::None, new_prel, "dpr", Some(&mut sig3), &mut dpr3)
+              .read_properties(MaybeMut::None, new_prel, "dpr", Some(&mut sig3), &mut dpr3, self.r.bump)
               .unwrap();
+
             ep.with_ctx(None, |ep| dpr3.visit(ep));
             assert_eq!(sig1, sig3);
             assert_eq!(dpr1, dpr3);

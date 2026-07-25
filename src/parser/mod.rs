@@ -127,8 +127,9 @@ impl Article {
         let mut total = 0;
         for (kind, base) in voc.base.0.iter_mut() {
           assert_eq!(SymbolKindClass::parse(buf[pos]), kind);
-          let i = (buf[pos + 1..].iter().position(|&c| c == b' '))
-            .ok_or_else(|| ParseError::unexpected_elem((pos + 1) as u64, "space", Some("eof".into())))?;
+          let i = (buf[pos + 1..].iter().position(|&c| c == b' ')).ok_or_else(|| {
+            ParseError::unexpected_elem((pos + 1) as u64, "space", Some("eof".into()))
+          })?;
           *base = (std::str::from_utf8(&buf[pos + 1..][..i]).ok().and_then(|p| p.parse().ok()))
             .ok_or_else(|| ParseError::BadInteger((pos + 1) as u64))?;
           total += *base;
@@ -137,8 +138,9 @@ impl Article {
         pos += 1;
         for _ in 0..total {
           let kind = SymbolKindClass::parse(buf[pos]);
-          let i = (buf[pos + 1..].iter().position(|&c| c == b'\n'))
-            .ok_or_else(|| ParseError::unexpected_elem((pos + 1) as u64, "newline", Some("eof".into())))?;
+          let i = (buf[pos + 1..].iter().position(|&c| c == b'\n')).ok_or_else(|| {
+            ParseError::unexpected_elem((pos + 1) as u64, "newline", Some("eof".into()))
+          })?;
           let line = std::str::from_utf8(&buf[pos + 1..][..i])
             .map_err(|_| ParseError::unexpected_elem((pos + 1) as u64, "ASCII", None))?
             .trim_end();
@@ -158,7 +160,8 @@ impl Article {
               }
               (left, SymbolDataKind::Pred { infinitive: Some(right) })
             }
-            (_, Some(_)) => return Err(ParseError::InvalidVocabLine((pos + 1) as u64, line.to_owned())),
+            (_, Some(_)) =>
+              return Err(ParseError::InvalidVocabLine((pos + 1) as u64, line.to_owned())),
             (SymbolKindClass::Struct, None) => (line, SymbolDataKind::Struct),
             (SymbolKindClass::LeftBrk, None) => (line, SymbolDataKind::LeftBrk),
             (SymbolKindClass::RightBrk, None) => (line, SymbolDataKind::RightBrk),
@@ -373,9 +376,13 @@ impl XmlReader {
 
   fn get_attr<F: FromStrPos>(&self, value: &[u8]) -> Result<F> {
     let pos = self.position();
-    self.0.decoder().decode(value)
+    self
+      .0
+      .decoder()
+      .decode(value)
       .map_err(|e| ParseError::Xml(None, e.into()))?
-      .parse().map_err(|e| F::to_err(e, pos))
+      .parse()
+      .map_err(|e| F::to_err(e, pos))
   }
 
   fn read_to_end(&mut self, tag: &[u8], buf: &mut Vec<u8>) {
@@ -442,6 +449,7 @@ struct MizReader<'a> {
   /// false = InMMLFileObj or InEnvFileObj, true = InVRFFileObj
   two_clusters: bool,
   ctx: MaybeMut<'a, Constructors>,
+  bump: &'a bumpalo::Bump,
   depth: u32,
   suppress_bvar_errors: bool,
 }
@@ -456,26 +464,27 @@ impl std::ops::DerefMut for MizReader<'_> {
 impl<'a> MizReader<'a> {
   /// two_clusters: false = InMMLFileObj or InEnvFileObj, true = InVRFFileObj
   fn new(
-    file: File, ctx: impl Into<MaybeMut<'a, Constructors>>, two_clusters: bool,
+    file: File, ctx: impl Into<MaybeMut<'a, Constructors>>, two_clusters: bool, bump: &'a bumpalo::Bump,
   ) -> Result<(MizReader<'a>, Vec<u8>)> {
     let mut buf = vec![];
     let r = XmlReader::new(file, &mut buf)?;
-    Ok((MizReader { r, two_clusters, ctx: ctx.into(), depth: 0, suppress_bvar_errors: false }, buf))
+    Ok((MizReader { r, two_clusters, ctx: ctx.into(), bump, depth: 0, suppress_bvar_errors: false }, buf))
   }
 
   fn position(&self) -> u64 { self.r.position() }
 
   fn with<R>(
-    file: File, ctx: impl Into<MaybeMut<'a, Constructors>>, two_clusters: bool,
+    file: File, ctx: impl Into<MaybeMut<'a, Constructors>>, two_clusters: bool, bump: &'a bumpalo::Bump,
     f: impl FnOnce(&mut MizReader<'a>, &mut Vec<u8>) -> Result<R>,
   ) -> Result<R> {
-    let (mut r, mut buf) = Self::new(file, ctx, two_clusters)?;
+    let (mut r, mut buf) = Self::new(file, ctx, two_clusters, bump)?;
     let mut result = f(&mut r, &mut buf);
     if let Err(e) = &mut result {
       r.set_pos(e)
     }
     result
   }
+
 
   fn read_pi(&mut self, buf: &mut Vec<u8>) -> Result<()> {
     assert!(matches!(self.r.read_event(buf)?, Event::PI(_)));
@@ -499,8 +508,9 @@ fn with_open0(path: PathBuf, f: impl FnOnce(File) -> Result<()>) -> PathResult<(
 
 impl MizPath {
   pub fn read_evl(&self, dirs: &mut Directives) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open(self.to_path(true, false, "evl"), false, |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.read_start(buf, Some("Environ"))?;
         for (i, dir) in &mut dirs.0 {
           let e = r.read_start(buf, Some("Directive"))?;
@@ -519,17 +529,26 @@ impl MizPath {
   }
 
   pub fn read_dcx(&self, syms: &mut Symbols) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open(self.to_path(true, false, "dcx"), false, |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.read_start(buf, Some("Symbols"))?;
         while let Ok(e) = r.try_read_start(buf, Some("Symbol"))? {
           let (mut kind, mut nr, mut name) = Default::default();
           for attr in e.attributes() {
             let attr = attr?;
             match attr.key.0 {
-              b"kind" => kind = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap().chars().next().unwrap() as u8,
+              b"kind" =>
+                kind = attr
+                  .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                  .unwrap()
+                  .chars()
+                  .next()
+                  .unwrap() as u8,
               b"nr" => nr = r.get_attr::<u32>(&attr.value)?,
-              b"name" => name = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap().to_string(),
+              b"name" =>
+                name =
+                  attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap().to_string(),
               _ => {}
             }
           }
@@ -553,8 +572,9 @@ impl MizPath {
   }
 
   pub fn read_vcl(&self, vocs: &mut Vocabularies) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open(self.to_path(true, false, "vcl"), false, |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.parse_vocabularies(buf, vocs)?;
         r.eof(buf)
       })
@@ -562,8 +582,9 @@ impl MizPath {
   }
 
   pub fn read_formats(&self, ext: &str, formats: &mut Formats) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open(self.to_path(true, false, ext), false, |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.read_start(buf, Some("Formats"))?;
         r.parse_formats_body(buf, &mut formats.formats, true)?;
         r.eof(buf)?;
@@ -579,8 +600,9 @@ impl MizPath {
   pub fn read_dfr_uncached(
     &self, new_prel: bool, vocs: &mut Vocabularies, formats: &mut IdxVec<FormatId, Format>,
   ) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open0(self.to_path(false, new_prel, "dfr"), |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.read_start(buf, Some("Formats"))?;
         r.parse_vocabularies(buf, vocs)?;
         r.parse_formats_body(buf, formats, false)?;
@@ -590,8 +612,9 @@ impl MizPath {
   }
 
   pub fn read_eno(&self, notas: &mut Vec<Pattern>) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open(self.to_path(true, false, "eno"), false, |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.read_pi(buf)?;
         r.read_start(buf, Some("Notations"))?;
         while let Ok(e) = r.try_read_start(buf, Some("Pattern"))? {
@@ -604,8 +627,9 @@ impl MizPath {
   }
 
   pub fn read_dno_uncached(&self, new_prel: bool, dno: &mut DepNotation) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open0(self.to_path(false, new_prel, "dno"), |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.read_start(buf, Some("Notations"))?;
         r.parse_signature(buf, &mut dno.sig)?;
         r.parse_vocabularies(buf, &mut dno.vocs)?;
@@ -620,8 +644,9 @@ impl MizPath {
   }
 
   pub fn read_atr(&self, constrs: &mut Constructors) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open(self.to_path(true, false, "atr"), false, |file| {
-      MizReader::with(file, constrs, false, |r, buf| {
+      MizReader::with(file, constrs, false, &bump, |r, buf| {
         r.read_pi(buf)?;
         r.read_start(buf, Some("Constructors"))?;
         r.parse_constructors_body(buf, None)?;
@@ -631,8 +656,9 @@ impl MizPath {
   }
 
   pub fn read_aco(&self, aco: &mut AccumConstructors) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open(self.to_path(true, false, "aco"), false, |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.read_pi(buf)?;
         r.read_start(buf, Some("Constructors"))?;
         r.read_start(buf, Some("SignatureWithCounts"))?;
@@ -654,8 +680,9 @@ impl MizPath {
   pub fn read_dco_uncached(
     &self, new_prel: bool, dco: &mut DepConstructors, read_constrs: bool,
   ) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open0(self.to_path(false, new_prel, "dco"), |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.read_start(buf, Some("Constructors"))?;
         r.parse_signature(buf, &mut dco.sig)?;
         r.read_start(buf, Some("ConstrCounts"))?;
@@ -670,8 +697,9 @@ impl MizPath {
   }
 
   pub fn read_dre_uncached(&self, dre: &mut DepRequirements) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open(self.to_path(false, false, "dre"), false, |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.read_start(buf, Some("Requirements"))?;
         r.parse_signature(buf, &mut dre.sig)?;
         while let Ok(e) = r.try_read_start(buf, Some("Requirement"))? {
@@ -686,8 +714,9 @@ impl MizPath {
   }
 
   pub fn read_ecl(&self, ctx: &Constructors, clusters: &mut Clusters) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open(self.to_path(true, false, "ecl"), false, |file| {
-      MizReader::with(file, ctx, false, |r, buf| {
+      MizReader::with(file, ctx, false, &bump, |r, buf| {
         r.read_pi(buf)?;
         r.read_start(buf, Some("Registrations"))?;
         while let Event::Start(e) = r.read_event(buf)? {
@@ -703,8 +732,9 @@ impl MizPath {
   }
 
   pub fn read_dcl_uncached(&self, new_prel: bool, dcl: &mut DepClusters) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open0(self.to_path(false, new_prel, "dcl"), |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.read_start(buf, Some("Registrations"))?;
         r.parse_signature(buf, &mut dcl.sig)?;
         while let Event::Start(e) = r.read_event(buf)? {
@@ -719,12 +749,14 @@ impl MizPath {
     })
   }
 
+
   pub fn read_definitions<'a>(
     &self, ctx: impl Into<MaybeMut<'a, Constructors>>, new_prel: bool, ext: &str,
-    sig: Option<&mut Vec<Article>>, defs: &mut Vec<Definiens>,
+    sig: Option<&mut Vec<Article>>, defs: &mut Vec<Definiens<'a>>,
+    bump: &'a bumpalo::Bump,
   ) -> PathResult<()> {
     with_open0(self.to_path(sig.is_none(), new_prel, ext), |file| {
-      MizReader::with(file, ctx, false, |r, buf| {
+      MizReader::with(file, ctx, false, bump, |r, buf| {
         if sig.is_none() {
           r.read_pi(buf)?;
         }
@@ -744,9 +776,10 @@ impl MizPath {
   pub fn read_properties<'a>(
     &self, ctx: impl Into<MaybeMut<'a, Constructors>>, new_prel: bool, ext: &str,
     sig: Option<&mut Vec<Article>>, props: &mut Vec<Property>,
+    bump: &'a bumpalo::Bump,
   ) -> PathResult<()> {
     with_open0(self.to_path(sig.is_none(), new_prel, ext), |file| {
-      MizReader::with(file, ctx, false, |r, buf| {
+      MizReader::with(file, ctx, false, bump, |r, buf| {
         if sig.is_none() {
           r.read_pi(buf)?
         }
@@ -766,9 +799,10 @@ impl MizPath {
   pub fn read_identify_regs<'a>(
     &self, ctx: impl Into<MaybeMut<'a, Constructors>>, new_prel: bool, ext: &str,
     sig: Option<&mut Vec<Article>>, ids: &mut Vec<IdentifyFunc>,
+    bump: &'a bumpalo::Bump,
   ) -> PathResult<()> {
     with_open0(self.to_path(sig.is_none(), new_prel, ext), |file| {
-      MizReader::with(file, ctx, false, |r, buf| {
+      MizReader::with(file, ctx, false, bump, |r, buf| {
         if sig.is_none() {
           r.read_pi(buf)?
         }
@@ -788,9 +822,10 @@ impl MizPath {
   pub fn read_reduction_regs<'a>(
     &self, ctx: impl Into<MaybeMut<'a, Constructors>>, new_prel: bool, ext: &str,
     sig: Option<&mut Vec<Article>>, reds: &mut Vec<Reduction>,
+    bump: &'a bumpalo::Bump,
   ) -> PathResult<()> {
     with_open0(self.to_path(sig.is_none(), new_prel, ext), |file| {
-      MizReader::with(file, ctx, false, |r, buf| {
+      MizReader::with(file, ctx, false, bump, |r, buf| {
         if sig.is_none() {
           r.read_pi(buf)?
         }
@@ -807,11 +842,12 @@ impl MizPath {
     })
   }
 
-  pub fn read_eth(
-    &self, ctx: &Constructors, refs: Option<&References>, libs: &mut Libraries,
+  pub fn read_eth<'a>(
+    &self, ctx: &Constructors, refs: Option<&References>, libs: &mut Libraries<'a>,
+    bump: &'a bumpalo::Bump,
   ) -> PathResult<()> {
     with_open0(self.to_path(true, false, "eth"), |file| {
-      MizReader::with(file, ctx, false, |r, buf| {
+      MizReader::with(file, ctx, false, bump, |r, buf| {
         r.read_pi(buf)?;
         r.read_start(buf, Some("Theorems"))?;
         while let Ok(e) = r.try_read_start(buf, Some("Theorem"))? {
@@ -846,8 +882,9 @@ impl MizPath {
   }
 
   pub fn read_the_uncached(&self, new_prel: bool, thms: &mut DepTheorems) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open0(self.to_path(false, new_prel, "the"), |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.read_start(buf, Some("Theorems"))?;
         r.parse_signature(buf, &mut thms.sig)?;
         while let Ok(e) = r.try_read_start(buf, Some("Theorem"))? {
@@ -866,18 +903,19 @@ impl MizPath {
             },
             _ => panic!("unknown theorem kind"),
           };
-          thms.thm.push(Theorem { pos: Position::default(), kind, stmt });
+          thms.thm.push(Theorem { pos: Position::default(), kind, stmt: stmt.to_ast() });
         }
         r.eof(buf)
       })
     })
   }
 
-  pub fn read_esh(
-    &self, ctx: &Constructors, refs: Option<&References>, libs: &mut Libraries,
+  pub fn read_esh<'a>(
+    &self, ctx: &Constructors, refs: Option<&References>, libs: &mut Libraries<'a>,
+    bump: &'a bumpalo::Bump,
   ) -> PathResult<()> {
     with_open0(self.to_path(true, false, "esh"), |file| {
-      MizReader::with(file, ctx, false, |r, buf| {
+      MizReader::with(file, ctx, false, bump, |r, buf| {
         r.read_pi(buf)?;
         r.read_start(buf, Some("Schemes"))?;
         while let Ok(e) = r.try_read_start(buf, Some("Scheme"))? {
@@ -910,8 +948,9 @@ impl MizPath {
   }
 
   pub fn read_sch_uncached(&self, new_prel: bool, schs: &mut DepSchemes) -> PathResult<()> {
+    let bump = bumpalo::Bump::new();
     with_open0(self.to_path(false, new_prel, "sch"), |file| {
-      MizReader::with(file, MaybeMut::None, false, |r, buf| {
+      MizReader::with(file, MaybeMut::None, false, &bump, |r, buf| {
         r.read_start(buf, Some("Schemes"))?;
         r.parse_signature(buf, &mut schs.sig)?;
         while let Event::Start(e) = r.read_event(buf)? {
@@ -937,9 +976,10 @@ impl MizPath {
     })
   }
 
-  pub fn read_xml(&self, mut f: impl FnMut(Item)) -> PathResult<()> {
+  pub fn read_xml<'a>(&self, bump: &'a bumpalo::Bump, mut f: impl FnMut(Item<'a>)) -> PathResult<()> {
+
     with_open0(self.to_path(true, false, "xml"), |file| {
-      let (mut r, mut buf) = MizReader::new(file, MaybeMut::None, true)?;
+      let (mut r, mut buf) = MizReader::new(file, MaybeMut::None, true, bump)?;
       r.read_pi(&mut buf)?;
       r.read_start(&mut buf, Some("Article"))?;
       let mut p = ArticleParser { r, buf };
@@ -951,6 +991,7 @@ impl MizPath {
     })
   }
 }
+
 
 #[derive(Default)]
 struct ConstructorAttrs {
@@ -1068,7 +1109,13 @@ impl MizReader<'_> {
         for attr in e.attributes() {
           let attr = attr?;
           match attr.key.0 {
-            b"kind" => kind = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap().chars().next().unwrap() as u8,
+            b"kind" =>
+              kind = attr
+                .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                .unwrap()
+                .chars()
+                .next()
+                .unwrap() as u8,
             b"nr" => nr = self.get_attr::<u32>(&attr.value)?,
             _ => {}
           }
@@ -1246,7 +1293,13 @@ impl MizReader<'_> {
       for attr in e.attributes() {
         let attr = attr?;
         match attr.key.0 {
-          b"kind" => kind = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap().chars().next().unwrap() as u8,
+          b"kind" =>
+            kind = attr
+              .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+              .unwrap()
+              .chars()
+              .next()
+              .unwrap() as u8,
           b"nr" => nr = self.get_attr::<u32>(&attr.value)?,
           _ => {}
         }
@@ -1401,7 +1454,7 @@ impl MizReader<'_> {
 
   fn parse_definiens_body(
     &mut self, buf: &mut Vec<u8>, (def_nr, article, constr): (DefId, Article, ConstrKind),
-  ) -> Result<Definiens> {
+  ) -> Result<Definiens<'a>> {
     let mut primary = vec![];
     let essential = loop {
       match self.parse_elem(buf)? {
@@ -1422,6 +1475,7 @@ impl MizReader<'_> {
     let c = ConstrDef { def_nr, article, constr, primary: primary.into() };
     Ok(Definiens { c, essential, assumptions, value })
   }
+
 
   fn parse_identify_attrs(&mut self, e: &BytesStart<'_>) -> Result<IdentifyAttrs> {
     let mut attrs = IdentifyAttrs::default();
@@ -1517,7 +1571,8 @@ impl MizReader<'_> {
     })
   }
 
-  fn parse_elem(&mut self, buf: &mut Vec<u8>) -> Result<Elem> {
+  fn parse_elem(&mut self, buf: &mut Vec<u8>) -> Result<Elem<'a>> {
+
     Ok(if let Event::Start(e) = self.read_event(buf)? {
       macro_rules! parse_var {
         () => {{
@@ -1624,12 +1679,12 @@ impl MizReader<'_> {
           Elem::Term(Term::The { ty })
         }
         b"Not" => {
-          let f = Box::new(self.parse_formula(buf)?.unwrap());
+          let f = bumpalo::boxed::Box::new_in(self.parse_formula(buf)?.unwrap(), self.bump);
           self.end_tag(buf)?;
           Elem::Formula(Formula::Neg { f })
         }
         b"And" => {
-          let mut args = vec![];
+          let mut args = bumpalo::collections::Vec::new_in(self.bump);
           while let Some(f) = self.parse_formula(buf)? {
             args.push(f)
           }
@@ -1652,7 +1707,7 @@ impl MizReader<'_> {
           let value = loop {
             match self.parse_elem(buf)? {
               Elem::Term(tm) => args.push(tm),
-              Elem::Formula(f) => break Box::new(f),
+              Elem::Formula(f) => break bumpalo::boxed::Box::new_in(f, self.bump),
               _ => panic!("expected formula"),
             }
           };
@@ -1667,7 +1722,7 @@ impl MizReader<'_> {
           let mut dom = Box::new(self.parse_type(buf)?.unwrap());
           dom.visit(&mut self.lower());
           self.depth += 1;
-          let scope = Box::new(self.parse_formula(buf)?.unwrap());
+          let scope = bumpalo::boxed::Box::new_in(self.parse_formula(buf)?.unwrap(), self.bump);
           self.depth -= 1;
           self.end_tag(buf)?;
           Elem::Formula(Formula::ForAll { id, dom, scope })
@@ -1685,12 +1740,13 @@ impl MizReader<'_> {
           let Formula::ForAll { id: _, dom, scope } = self.parse_formula(buf)?.unwrap() else {
             panic!()
           };
-          let sc2 = scope.mk_neg();
+          let sc2 = scope.mk_neg(self.bump);
           let &[Formula::Pred { nr: le, .. }, _, ref rest @ ..] = sc2.conjuncts() else { panic!() };
-          let scope = Formula::mk_and(rest.to_owned());
+          let scope = Formula::mk_and(bumpalo::collections::Vec::from_iter_in(rest.iter().map(|f| f.clone_in(self.bump)), self.bump), self.bump);
           self.end_tag(buf)?;
-          Elem::Formula(Formula::FlexAnd { nat: dom, le, terms, scope: Box::new(scope.mk_neg()) })
+          Elem::Formula(Formula::FlexAnd { nat: dom, le, terms, scope: bumpalo::boxed::Box::new_in(scope.mk_neg(self.bump), self.bump) })
         }
+
         b"Verum" => {
           self.end_tag(buf)?;
           Elem::Formula(Formula::True)
@@ -1739,7 +1795,9 @@ impl MizReader<'_> {
           for attr in e.attributes() {
             let attr = attr?;
             match attr.key.0 {
-              b"kind" => kind = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap().as_bytes()[0],
+              b"kind" =>
+                kind =
+                  attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap().as_bytes()[0],
               b"symbolnr" => sym = self.get_attr::<u32>(&attr.value)? - 1,
               b"argnr" => args = Some(self.get_attr(&attr.value)?),
               b"leftargnr" => left = Some(self.get_attr(&attr.value)?),
@@ -1815,7 +1873,7 @@ impl MizReader<'_> {
     Ok(args.into())
   }
 
-  fn parse_formula(&mut self, buf: &mut Vec<u8>) -> Result<Option<Formula>> {
+  fn parse_formula(&mut self, buf: &mut Vec<u8>) -> Result<Option<Formula<'a>>> {
     Ok(match self.parse_elem(buf)? {
       Elem::Formula(f) => Some(f),
       _ => None,
@@ -1824,7 +1882,7 @@ impl MizReader<'_> {
 
   fn parse_proposition(
     &mut self, buf: &mut Vec<u8>, quotable: bool,
-  ) -> Result<Option<Proposition>> {
+  ) -> Result<Option<Proposition<'a>>> {
     Ok(match self.parse_elem(buf)? {
       Elem::Proposition(f) => {
         assert!(quotable || f.label.is_none());
@@ -1842,7 +1900,7 @@ impl MizReader<'_> {
   }
 
   fn parse_def_body<T>(
-    &mut self, buf: &mut Vec<u8>, get: impl Fn(Elem) -> Option<T>,
+    &mut self, buf: &mut Vec<u8>, get: impl Fn(Elem<'a>) -> Option<T>,
   ) -> Result<DefBody<T>> {
     let mut cases = vec![];
     let otherwise = loop {
@@ -1857,22 +1915,23 @@ impl MizReader<'_> {
     };
     Ok(DefBody { cases: cases.into(), otherwise })
   }
+
 }
 
 #[derive(Debug)]
-enum Elem {
+enum Elem<'a> {
   Type(Type, IdentId),
   Term(Term),
-  Formula(Formula),
+  Formula(Formula<'a>),
   Properties(Properties),
   ArgTypes(Box<[Type]>),
   Fields(Box<[SelId]>),
   Essentials(Box<[LocusId]>),
-  DefMeaning(DefValue),
-  PartialDef(Box<(Elem, Formula)>),
+  DefMeaning(DefValue<'a>),
+  PartialDef(Box<(Elem<'a>, Formula<'a>)>),
   Ident(u32),
-  Proposition(Proposition),
-  Thesis(Thesis),
+  Proposition(Proposition<'a>),
+  Thesis(Thesis<'a>),
   Format(Format),
   #[allow(dead_code)]
   Priority(PriorityKind, u32),
@@ -1880,27 +1939,27 @@ enum Elem {
   End,
 }
 
-impl TryFrom<Elem> for Type {
+impl<'a> TryFrom<Elem<'a>> for Type {
   type Error = ();
-  fn try_from(e: Elem) -> StdResult<Type, Self::Error> {
+  fn try_from(e: Elem<'a>) -> StdResult<Type, Self::Error> {
     match e {
       Elem::Type(v, _) => Ok(v),
       _ => Err(()),
     }
   }
 }
-impl TryFrom<Elem> for Term {
+impl<'a> TryFrom<Elem<'a>> for Term {
   type Error = ();
-  fn try_from(e: Elem) -> StdResult<Term, Self::Error> {
+  fn try_from(e: Elem<'a>) -> StdResult<Term, Self::Error> {
     match e {
       Elem::Term(v) => Ok(v),
       _ => Err(()),
     }
   }
 }
-impl TryFrom<Elem> for Formula {
+impl<'a> TryFrom<Elem<'a>> for Formula<'a> {
   type Error = ();
-  fn try_from(e: Elem) -> StdResult<Formula, Self::Error> {
+  fn try_from(e: Elem<'a>) -> StdResult<Formula<'a>, Self::Error> {
     match e {
       Elem::Formula(v) => Ok(v),
       _ => Err(()),

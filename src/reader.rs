@@ -14,10 +14,11 @@ mk_id! {
   DefiniensId(u32),
 }
 
-pub struct Reader {
+pub struct Reader<'a> {
   pub g: Global,
   pub lc: LocalContext,
-  pub libs: Libraries,
+  pub bump: &'a bumpalo::Bump,
+  pub libs: Libraries<'a>,
   pub article: Article,
   treat_thm_as_axiom: bool,
   pub no_suppress_checker: bool,
@@ -30,11 +31,11 @@ pub struct Reader {
   /// Notat
   pub notations: EnumMap<PatternKindClass, ExtVec<Pattern>>,
   /// Definientia
-  pub definitions: IdxVec<DefiniensId, Definiens>,
+  pub definitions: IdxVec<DefiniensId, Definiens<'a>>,
   /// EqDefinientia
-  pub equalities: Vec<Definiens>,
+  pub equalities: Vec<Definiens<'a>>,
   /// ExDefinientia
-  pub expansions: Vec<Definiens>,
+  pub expansions: Vec<Definiens<'a>>,
   /// gPropertiesList
   pub properties: Vec<Property>,
   /// gIdentifications
@@ -43,17 +44,18 @@ pub struct Reader {
   pub reductions: Vec<Reduction>,
   pub equals: BTreeMap<ConstrKind, Vec<EqualsDef>>,
   pub func_ids: BTreeMap<ConstrKind, Vec<usize>>,
-  props: Vec<Formula>,
+  props: Vec<Formula<'a>>,
   labels: IdxVec<LabelId, Option<usize>>,
   pending_defs: Vec<PendingDef>,
   pub def_map: HashMap<DefRef, DefiniensId>,
   pub pos: Position,
   pub progress: Option<ProgressBar>,
 }
-impl WithGlobalLocal for Reader {
+impl<'a> WithGlobalLocal for Reader<'a> {
   fn global(&self) -> &Global { &self.g }
   fn local(&self) -> &LocalContext { &self.lc }
 }
+
 
 impl MizPath {
   pub fn with_reader(
@@ -94,7 +96,9 @@ impl MizPath {
     };
 
     // Load_EnvConstructors
-    let mut v = Reader::new(cfg, progress.cloned(), accom, self.art);
+    let bump = bumpalo::Bump::new();
+    let mut v = Reader::new(cfg, progress.cloned(), accom, self.art, &bump);
+
     v.lc.attr_sort_bug = cfg.attr_sort_bug;
     v.lc.formatter.dump = cfg.dump.formatter;
     let old = v.lc.start_stash();
@@ -227,7 +231,7 @@ impl MizPath {
           self.write_dfs(&v.definitions.0)
         }
       } else {
-        self.read_definitions(&v.g.constrs, false, "dfs", None, &mut v.definitions.0).unwrap();
+        self.read_definitions(&v.g.constrs, false, "dfs", None, &mut v.definitions.0, v.bump).unwrap();
       }
       if cfg.dump.definitions {
         for d in &v.definitions.0 {
@@ -243,7 +247,7 @@ impl MizPath {
           .accom_definitions(&v.g.constrs, DirectiveKind::Equalities, &mut v.equalities)
           .unwrap();
       } else {
-        self.read_definitions(&v.g.constrs, false, "dfe", None, &mut v.equalities).unwrap();
+        self.read_definitions(&v.g.constrs, false, "dfe", None, &mut v.equalities, v.bump).unwrap();
       }
       if cfg.dump.definitions {
         for d in &v.equalities {
@@ -259,7 +263,7 @@ impl MizPath {
           .accom_definitions(&v.g.constrs, DirectiveKind::Expansions, &mut v.expansions)
           .unwrap();
       } else {
-        self.read_definitions(&v.g.constrs, false, "dfx", None, &mut v.expansions).unwrap();
+        self.read_definitions(&v.g.constrs, false, "dfx", None, &mut v.expansions, v.bump).unwrap();
       }
       if cfg.dump.definitions {
         for d in &v.expansions {
@@ -272,7 +276,7 @@ impl MizPath {
     if let Some(accom) = &mut v.accom {
       accom.accom_properties(&v.g.constrs, &mut v.properties).unwrap();
     } else {
-      self.read_properties(&v.g.constrs, false, "epr", None, &mut v.properties).unwrap();
+      self.read_properties(&v.g.constrs, false, "epr", None, &mut v.properties, v.bump).unwrap();
     }
 
     // LoadIdentify, LoadReductions
@@ -281,8 +285,8 @@ impl MizPath {
         accom.accom_identify_regs(&v.g.constrs, &mut v.identify).unwrap();
         accom.accom_reduction_regs(&v.g.constrs, &mut v.reductions).unwrap();
       } else {
-        self.read_identify_regs(&v.g.constrs, false, "eid", None, &mut v.identify).unwrap();
-        self.read_reduction_regs(&v.g.constrs, false, "erd", None, &mut v.reductions).unwrap();
+        self.read_identify_regs(&v.g.constrs, false, "eid", None, &mut v.identify, v.bump).unwrap();
+        self.read_reduction_regs(&v.g.constrs, false, "erd", None, &mut v.reductions, v.bump).unwrap();
       }
     }
 
@@ -344,7 +348,7 @@ impl MizPath {
       if let Some(accom) = &mut v.accom {
         accom.accom_theorems(cfg.xml_internals, &v.g.constrs, &mut v.def_map, &mut v.libs).unwrap();
       } else {
-        self.read_eth(&v.g.constrs, refs, &mut v.libs).unwrap();
+        self.read_eth(&v.g.constrs, refs, &mut v.libs, v.bump).unwrap();
       }
       let cc = &mut InternConst::new(&v.g, &v.lc, &v.equals, &v.identify, &v.func_ids);
       v.libs.thm.values_mut().for_each(|f| f.visit(cc));
@@ -352,8 +356,9 @@ impl MizPath {
       if let Some(accom) = &mut v.accom {
         accom.accom_schemes(cfg.xml_internals, &v.g.constrs, &mut v.libs).unwrap();
       } else {
-        self.read_esh(&v.g.constrs, refs, &mut v.libs).unwrap();
+        self.read_esh(&v.g.constrs, refs, &mut v.libs, v.bump).unwrap();
       }
+
       RoundUpTypes::with(&v.g, &mut v.lc, |rr| v.libs.visit(rr));
 
       if cfg.dump.libraries {
@@ -391,9 +396,10 @@ pub struct Scope {
   pub pending_defs: usize,
 }
 
-impl Reader {
+impl<'a> Reader<'a> {
   pub fn new(
     cfg: &Config, progress: Option<ProgressBar>, accom: Option<Box<Accomodator>>, article: Article,
+    bump: &'a bumpalo::Bump,
   ) -> Self {
     Reader {
       g: Global {
@@ -404,6 +410,7 @@ impl Reader {
         numeral_type: Type::SET,
       },
       lc: LocalContext::default(),
+      bump,
       libs: Libraries::default(),
       article,
       treat_thm_as_axiom: matches!(article.as_str(), "tarski_0" | "tarski_a"),
@@ -430,21 +437,32 @@ impl Reader {
     }
   }
 
+
   pub fn err(&mut self, pos: Position, msg: MizError) {
     self.has_errors |= msg.report(self.article, pos, &self.g, &self.lc);
   }
 
-  pub fn intern<'a, T: Clone + Visitable<InternConst<'a>>>(&'a self, t: &T) -> T {
+  pub fn intern<T: Clone + for<'b> Visitable<InternConst<'b>>>(&self, t: &T) -> T {
     let mut t = t.clone();
     t.visit(&mut self.intern_const());
     t
   }
 
+  pub fn intern_formula(&self, mut f: Formula<'a>) -> Formula<'a> {
+    f.visit(&mut self.intern_const());
+    f
+  }
+
+
+
+
+
   pub fn intern_const(&self) -> InternConst<'_> {
     InternConst::new(&self.g, &self.lc, &self.equals, &self.identify, &self.func_ids)
   }
 
-  pub fn push_prop(&mut self, label: Option<LabelId>, prop: Formula) {
+  pub fn push_prop(&mut self, label: Option<LabelId>, prop: Formula<'a>) {
+
     // eprintln!("push_prop {label:?}: {prop:?}");
     if let Some(label) = label {
       assert_eq!(label, self.labels.push(Some(self.props.len())));
@@ -452,13 +470,14 @@ impl Reader {
     self.props.push(prop);
   }
 
-  fn read_proposition(&mut self, prop: &Proposition) {
-    self.push_prop(prop.label, self.intern(&prop.f))
+  fn read_proposition(&mut self, prop: &Proposition<'a>) {
+    self.push_prop(prop.label, self.intern_formula(prop.f.clone_in(self.bump)))
   }
 
   fn push_fixed_var(&mut self, id: IdentId, ty: &Type) {
     self.lc.fixed_var.push(FixedVar { id, ty: self.intern(ty), def: None });
   }
+
 
   fn read_fixed_vars(&mut self, vars: &[(IdentId, Type)]) {
     vars.iter().for_each(|(id, ty)| self.push_fixed_var(*id, ty))
@@ -536,7 +555,8 @@ impl Reader {
 
   /// Prepare
   pub fn run_checker(&mut self, path: &MizPath) {
-    let result = path.read_xml(|it| {
+    let result = path.read_xml(self.bump, |it| {
+
       assert!(matches!(
         it,
         Item::Auxiliary(_)
@@ -607,7 +627,8 @@ impl Reader {
     }
   }
 
-  pub fn read_item(&mut self, it: &Item) {
+  pub fn read_item(&mut self, it: &Item<'a>) {
+
     if let Some(pos) = it.pos() {
       self.set_pos(pos);
     }
@@ -654,7 +675,8 @@ impl Reader {
           }
           this.read_just_prop(prop, just, false)
         });
-        self.push_prop(None, self.intern(block_thesis))
+        self.push_prop(None, self.intern_formula(block_thesis.clone_in(self.bump)))
+
       }
       Item::Auxiliary(AuxiliaryItem::Statement(it)) | Item::Thus(it) => self.read_stmt(it),
       Item::Auxiliary(AuxiliaryItem::Consider { prop, just, fixed, intro }) => {
@@ -741,12 +763,13 @@ impl Reader {
       let mut prems = prems
         .iter()
         .map(|prem| {
-          let f = this.intern(&prem.f);
-          this.push_prop(prem.label, f.clone());
+          let f = this.intern_formula(prem.f.clone_in(this.bump));
+          this.push_prop(prem.label, f.clone_in(this.bump));
           f
         })
         .collect();
-      let mut thesis = this.intern(&thesis.f);
+      let mut thesis = this.intern_formula(thesis.f.clone_in(this.bump));
+
       this.read_justification(&thesis, just);
       let mut primary = this.lc.sch_func_ty.0.drain(..).collect();
       this.lc.expand_consts(&this.g.constrs, |c| {
@@ -758,13 +781,14 @@ impl Reader {
     });
   }
 
-  pub fn read_definiens(&mut self, df: &Definiens) {
+  pub fn read_definiens(&mut self, df: &Definiens<'a>) {
     if self.g.cfg.analyzer_enabled {
-      self.definitions.push(df.clone());
+      self.definitions.push(df.clone_in(self.bump));
     }
     if self.g.cfg.checker_enabled {
-      self.equalities.push(df.clone());
-      self.expansions.push(df.clone());
+      self.equalities.push(df.clone_in(self.bump));
+      self.expansions.push(df.clone_in(self.bump));
+
       if let Some(func) = df.equals_expansion() {
         let f = func.pattern.0;
         if !func.expansion.has_func(&self.g.constrs, f) {
@@ -792,11 +816,11 @@ impl Reader {
     }
   }
 
-  fn read_justification(&mut self, thesis: &Formula, just: &Justification) {
+  fn read_justification(&mut self, thesis: &Formula<'a>, just: &Justification<'a>) {
     match just {
       Justification::Simple(it) => self.read_inference(thesis, it),
       Justification::Proof { label, thesis: block_thesis, items, .. } => {
-        let block_thesis = self.intern(block_thesis);
+        let block_thesis = self.intern_formula(block_thesis.clone_in(self.bump));
         assert!(self.g.eq(&self.lc, thesis, &block_thesis), "\n{thesis:?}\n !=\n{block_thesis:?}");
         self.scope(*label, false, |this| {
           for it in items {
@@ -812,15 +836,15 @@ impl Reader {
     }
   }
 
-  fn read_just_prop(&mut self, prop: &Proposition, just: &Justification, quotable: bool) {
-    let f = self.intern(&prop.f);
+  fn read_just_prop(&mut self, prop: &Proposition<'a>, just: &Justification<'a>, quotable: bool) {
+    let f = self.intern_formula(prop.f.clone_in(self.bump));
     self.read_justification(&f, just);
     if quotable {
       self.push_prop(prop.label, f);
     }
   }
 
-  fn read_stmt(&mut self, it: &Statement) {
+  fn read_stmt(&mut self, it: &Statement<'a>) {
     match it {
       Statement::Proposition { prop, just } => self.read_just_prop(prop, just, true),
       Statement::IterEquality { label, lhs, steps, .. } => {
@@ -839,17 +863,19 @@ impl Reader {
             this.read_item(it);
           }
         });
-        self.push_prop(*label, self.intern(thesis));
+        self.push_prop(*label, self.intern_formula(thesis.clone_in(self.bump)));
       }
     }
   }
 
-  fn read_corr_conds(&mut self, conds: &[CorrCond], corr: &Option<Correctness>) {
+
+  fn read_corr_conds(&mut self, conds: &[CorrCond<'a>], corr: &Option<Correctness<'a>>) {
     conds.iter().for_each(|c| self.read_just_prop(&c.prop, &c.just, false));
     if let Some(c) = corr {
       self.read_just_prop(&c.prop, &c.just, false)
     }
   }
+
 
   pub fn push_constr(&mut self, id: ConstrKind) { self.pending_defs.push(PendingDef::Constr(id)) }
 
@@ -914,7 +940,8 @@ impl Reader {
     //
   }
 
-  fn read_cluster_decl(&mut self, cl: &ClusterDecl) {
+  fn read_cluster_decl(&mut self, cl: &ClusterDecl<'a>) {
+
     self.read_corr_conds(&cl.conds, &cl.corr);
     match &cl.kind {
       ClusterDeclKind::R(cl) => self.read_registered_cluster(cl.clone()),
@@ -998,7 +1025,9 @@ impl Reader {
     let mut ck = Checker {
       g: &mut self.g,
       lc: &mut self.lc,
+      bump: self.bump,
       expansions: &self.expansions,
+
       equals: &self.equals,
       identify: &self.identify,
       func_ids: &self.func_ids,
@@ -1010,7 +1039,8 @@ impl Reader {
       InferenceKind::By { linked } => {
         if !self.treat_thm_as_axiom || linked || !it.refs.is_empty() {
           // eprintln!("thesis: {thesis:?}");
-          let neg_thesis = thesis.clone().mk_neg();
+          let neg_thesis = thesis.clone_in(self.bump).mk_neg(self.bump);
+
           let mut premises = vec![&neg_thesis];
           if linked {
             premises.push(self.props.last().unwrap());

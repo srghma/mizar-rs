@@ -37,3 +37,12 @@ num_cpus = "1.17"
 serde = { version = "1.0", features = ["rc"] }
 serde_derive = "1.0"
 serde_json = { version = "1.0", features = ["unbounded_depth"] }
+bumpalo = { version = "3.16", features = ["boxed", "collections"] }
+
+[dev-dependencies]
+criterion = "0.5"
+
+
+
+
+

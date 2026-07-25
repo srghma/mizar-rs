@@ -16,7 +16,8 @@ use std::marker::PhantomData;
 pub struct Checker<'a> {
   pub g: &'a Global,
   pub lc: &'a mut LocalContext,
-  pub expansions: &'a [Definiens],
+  pub bump: &'a bumpalo::Bump,
+  pub expansions: &'a [Definiens<'a>],
   pub equals: &'a BTreeMap<ConstrKind, Vec<EqualsDef>>,
   pub identify: &'a [IdentifyFunc],
   pub func_ids: &'a BTreeMap<ConstrKind, Vec<usize>>,
@@ -24,6 +25,7 @@ pub struct Checker<'a> {
   pub article: Article,
   pub pos: Position,
 }
+
 
 impl<'a> Checker<'a> {
   fn intern_const(&self) -> InternConst<'_> {
@@ -44,27 +46,28 @@ impl<'a> Checker<'a> {
     if self.g.cfg.checker_inputs {
       eprintln!();
     }
-    let mut check_f = Formula::mk_and_with(|conjs| {
+    let mut check_f = Formula::mk_and_with(self.bump, |conjs| {
       for f in premises {
         if self.g.cfg.checker_inputs {
           eprintln!("input: {f:?}");
         }
-        let mut f = f.clone();
-        Expand { g: self.g, lc: self.lc, expansions: self.expansions }.expand(&mut f, true);
+        let mut f = f.clone_in(self.bump);
+        Expand { g: self.g, lc: self.lc, bump: self.bump, expansions: self.expansions }.expand(&mut f, true);
         if self.g.cfg.legacy_flex_handling {
-          ExpandLegacyFlex { depth: 0 }.visit_formula(&mut f);
+          ExpandLegacyFlex { depth: 0, bump: self.bump }.visit_formula(&mut f);
         }
         // vprintln!("expand: {f:?}");
-        f.distribute_quantifiers(&self.g.constrs, self.lc, 0);
+        f.distribute_quantifiers(&self.g.constrs, self.lc, 0, self.bump);
         // vprintln!("distributed: {f:?}");
-        f.append_conjuncts_to(conjs);
+        f.append_conjuncts_to(self.bump, conjs);
       }
     });
     if self.g.cfg.checker_header {
       eprintln!("refuting {:?}:{:?}:\n  {check_f:?}", self.article, self.pos);
     }
 
-    OpenAsConst(self).open_quantifiers(&mut check_f, true);
+    OpenAsConst(self).open_quantifiers(&mut check_f, true, self.bump);
+
     // vprintln!("opened {:?}:{:?}:\n  {check_f:?}", self.article, self.pos);
 
     check_f.visit(&mut self.intern_const());
@@ -86,7 +89,7 @@ impl<'a> Checker<'a> {
           "falsifying {:?}:{:?}.{i}: {:#?}",
           self.article,
           self.pos,
-          f.0.iter().map(|(&a, &val)| atoms.0[a].clone().maybe_neg(val)).collect_vec()
+          f.0.iter().map(|(&a, &val)| atoms.0[a].clone_in(self.bump).maybe_neg(val, self.bump)).collect_vec()
         );
       }
       let sat = (|| {
@@ -101,7 +104,7 @@ impl<'a> Checker<'a> {
             "proved {:?}:{:?}.{i}! {:#?}",
             self.article,
             self.pos,
-            f.0.iter().map(|(&a, &val)| atoms.0[a].clone().maybe_neg(val)).collect_vec()
+            f.0.iter().map(|(&a, &val)| atoms.0[a].clone_in(self.bump).maybe_neg(val, self.bump)).collect_vec()
           );
         }
       } else {
@@ -111,7 +114,7 @@ impl<'a> Checker<'a> {
             "FAILED TO JUSTIFY {:?}:{:?}.{i}: {:#?}",
             self.article,
             self.pos,
-            f.0.iter().map(|(&a, &val)| atoms.0[a].clone().maybe_neg(val)).collect_vec()
+            f.0.iter().map(|(&a, &val)| atoms.0[a].clone_in(self.bump).maybe_neg(val, self.bump)).collect_vec()
           );
         }
         stat("failure", true);
@@ -131,7 +134,7 @@ impl<'a> Checker<'a> {
   }
 
   fn process_is(
-    &self, atoms: &mut Atoms, normal_form: &mut Vec<Conjunct<AtomId, bool>>,
+    &self, atoms: &mut Atoms<'a>, normal_form: &mut Vec<Conjunct<AtomId, bool>>,
   ) -> Result<(), Overflow> {
     let (mut i, mut len) = (0, normal_form.len());
     while i < len {
@@ -152,11 +155,11 @@ impl<'a> Checker<'a> {
       }
       let mut inst = Dnf::single(conj1);
       for a in is_ats {
-        let Formula::Is { term, ty } = &atoms.0[a].clone() else { unreachable!() };
+        let Formula::Is { term, ty } = &atoms.0[a] else { unreachable!() };
         let Attrs::Consistent(attrs) = ty.attrs.0.clone() else { unreachable!() };
         let ty2 = Type { kind: ty.kind, attrs: Default::default(), args: ty.args.clone() };
         let f2 = Formula::Is { term: term.clone(), ty: Box::new(ty2) };
-        let a2 = atoms.insert(self.g, self.lc, Cow::Owned(f2));
+        let a2 = atoms.insert(self.g, self.lc, f2);
         let mut inst1 = vec![];
         for attr in attrs {
           let c = &self.g.constrs.attribute[attr.nr];
@@ -167,7 +170,7 @@ impl<'a> Checker<'a> {
           attrs.visit(&mut self.intern_const());
           let ty3 = Type { kind: ty.kind, attrs: (attrs.clone(), attrs), args: ty.args.clone() };
           let f3 = Formula::Is { term: term.clone(), ty: Box::new(ty3) };
-          let a3 = atoms.insert(self.g, self.lc, Cow::Owned(f3));
+          let a3 = atoms.insert(self.g, self.lc, f3);
           Dnf::insert_and_absorb(&mut inst1, Conjunct::single(a3, true))?;
         }
         let mut inst2 = vec![Conjunct::single(a2, false)];
@@ -182,7 +185,9 @@ impl<'a> Checker<'a> {
                 term: Box::new(Term::mk_select(self.g, self.lc, sel, term, w)),
                 ty: Box::new(tm2.get_type_uncached(self.g, self.lc)),
               };
-              let a3 = atoms.insert(self.g, self.lc, Cow::Owned(f3));
+              let a3 = atoms.insert(self.g, self.lc, f3);
+
+
               Dnf::insert_and_absorb(&mut inst3, Conjunct::single(a3, false))?;
             }
             Dnf::mk_and_core(&mut inst2, &inst3)?
@@ -248,11 +253,12 @@ pub type OrUnsat<T> = Result<T, Unsat>;
 struct Expand<'a> {
   g: &'a Global,
   lc: &'a mut LocalContext,
-  expansions: &'a [Definiens],
+  bump: &'a bumpalo::Bump,
+  expansions: &'a [Definiens<'a>],
 }
 
-impl Expand<'_> {
-  fn expand(&mut self, f: &mut Formula, pos: bool) {
+impl<'a> Expand<'a> {
+  fn expand(&mut self, f: &mut Formula<'a>, pos: bool) {
     match f {
       Formula::Neg { f: arg } => {
         self.expand(arg, !pos);
@@ -260,13 +266,9 @@ impl Expand<'_> {
           *f = std::mem::take(&mut **f2)
         }
       }
-      Formula::And { args } =>
-        *f = Formula::mk_and_with(|new_args| {
-          for mut f in std::mem::take(args) {
-            self.expand(&mut f, pos);
-            f.append_conjuncts_to(new_args);
-          }
-        }),
+      Formula::And { args } => {
+        args.iter_mut().for_each(|f| self.expand(f, pos));
+      }
       Formula::ForAll { id, dom, scope } if !pos => {
         self.lc.bound_var.push((*id, (**dom).clone()));
         self.expand(scope, pos);
@@ -275,36 +277,40 @@ impl Expand<'_> {
       Formula::Pred { nr, args } => {
         let (n2, args2) = Formula::adjust_pred(*nr, args, Some(&self.g.constrs));
         let expansions = self.well_matched_expansions(ConstrKind::Pred(n2), args2);
-        f.conjdisj_many(pos, expansions);
+        f.conjdisj_many(pos, bumpalo::collections::Vec::from_iter_in(expansions, self.bump), self.bump);
       }
       Formula::Attr { nr, args } => {
         let n2 = Formula::adjust_attr(*nr, args, Some(&self.g.constrs)).0;
         let expansions = self.well_matched_expansions(ConstrKind::Attr(n2), args);
-        f.conjdisj_many(pos, expansions);
+        f.conjdisj_many(pos, bumpalo::collections::Vec::from_iter_in(expansions, self.bump), self.bump);
       }
+
       Formula::FlexAnd { nat, le, terms, scope } =>
         if self.lc.bound_var.is_empty() {
-          *f = Formula::mk_and_with(move |conjs| {
+          let bump = self.bump;
+          *f = Formula::mk_and_with(bump, move |conjs| {
             {
               let mut epf = ExpandPrivFunc(&self.g.constrs, self.lc);
               let terms2 = (*terms).visit_cloned(&mut epf);
-              let scope2 = (*scope).visit_cloned(&mut epf);
-              let nat = std::mem::take(nat);
+              let scope2 = scope.clone_in(bump);
+              scope2.clone_in(bump).visit(&mut epf);
+              let nat = nat.clone();
               let f2 =
-                Global::expand_flex_and(nat.clone(), *le, (*terms2).clone(), scope2.clone(), 0);
-              let f1 = Formula::FlexAnd { nat, le: *le, terms: terms2, scope: scope2 };
-              conjs.push(f1.maybe_neg(pos));
-              f2.maybe_neg(pos).append_conjuncts_to(conjs);
+                Global::expand_flex_and(nat.clone(), *le, (*terms2).clone(), bumpalo::boxed::Box::new_in(scope2.clone_in(bump), bump), 0, bump);
+              let f1 = Formula::FlexAnd { nat, le: *le, terms: terms2, scope: bumpalo::boxed::Box::new_in(scope2, bump) };
+              conjs.push(f1.maybe_neg(pos, bump));
+              f2.maybe_neg(pos, bump).append_conjuncts_to(bump, conjs);
             }
             if pos {
               self.expand_flex(terms, scope, conjs);
             } else {
-              let f = Formula::mk_and_with(|conjs2| self.expand_flex(terms, scope, conjs2));
-              f.mk_neg().append_conjuncts_to(conjs);
+              let f = Formula::mk_and_with(self.bump, |conjs2| self.expand_flex(terms, scope, conjs2));
+              f.mk_neg(self.bump).append_conjuncts_to(self.bump, conjs);
             }
           })
-          .maybe_neg(pos);
+          .maybe_neg(pos, self.bump);
         },
+
       Formula::LegacyFlexAnd { .. }
       | Formula::SchPred { .. }
       | Formula::PrivPred { .. }
@@ -315,7 +321,8 @@ impl Expand<'_> {
   }
 
   /// ExpandFlex
-  fn expand_flex(&mut self, terms: &[Term; 2], scope: &Formula, conjs: &mut Vec<Formula>) {
+  fn expand_flex(&mut self, terms: &[Term; 2], scope: &Formula<'a>, conjs: &mut bumpalo::collections::Vec<'a, Formula<'a>>) {
+
     fn get_number<'a>(
       g: &Global, ic: &'a IdxVec<InferId, Assignment>, mut tm: &'a Term, zero: &mut Option<Term>,
     ) -> Option<u32> {
@@ -344,12 +351,16 @@ impl Expand<'_> {
     if right.saturating_sub(left) <= 100 {
       for i in left..=right {
         let i = if i == 0 { zero.take().unwrap() } else { Term::Numeral(i) };
-        scope.visit_cloned(&mut Inst0(0, &i)).append_conjuncts_to(conjs);
+        let mut f = scope.clone_in(self.bump);
+        f.visit(&mut Inst0(0, &i));
+        f.append_conjuncts_to(self.bump, conjs);
       }
     }
   }
 
-  fn well_matched_expansions(&self, kind: ConstrKind, args: &[Term]) -> Vec<Formula> {
+
+
+  fn well_matched_expansions(&self, kind: ConstrKind, args: &[Term]) -> Vec<Formula<'a>> {
     let mut expansions = vec![];
     for exp in self.expansions.iter().rev() {
       let Formula::True = exp.assumptions else { continue };
@@ -357,7 +368,7 @@ impl Expand<'_> {
       let [] = *body.cases else { continue };
       let Some(subst) = exp.matches(self.g, self.lc, kind, args) else { continue };
       let base = self.lc.bound_var.len() as u32;
-      let mut result = body.otherwise.as_ref().expect("no cases and no otherwise?").clone();
+      let mut result = body.otherwise.as_ref().expect("no cases and no otherwise?").clone_in(self.bump);
       subst.inst_formula_mut(&self.g.constrs, self.lc, &mut result, base);
       expansions.push(result)
     }
@@ -365,47 +376,45 @@ impl Expand<'_> {
   }
 }
 
-struct ExpandLegacyFlex {
+struct ExpandLegacyFlex<'a> {
   depth: u32,
+  bump: &'a bumpalo::Bump,
 }
-impl VisitMut for ExpandLegacyFlex {
+impl<'a> VisitMut for ExpandLegacyFlex<'a> {
   fn push_bound(&mut self, _: IdentId, _: &mut Type) { self.depth += 1 }
   fn pop_bound(&mut self, n: u32) { self.depth -= n }
-  fn visit_formula(&mut self, f: &mut Formula) {
+  fn visit_formula(&mut self, f: &mut Formula<'a>) {
+
     if let Formula::FlexAnd { nat, le, terms, scope } = f {
-      *f = Global::into_legacy_flex_and(nat, *le, terms, scope, self.depth)
+      *f = Global::into_legacy_flex_and(nat, *le, terms, scope, self.depth, self.bump)
     }
     self.super_visit_formula(f)
   }
 }
 
-impl Formula {
-  pub fn distribute_quantifiers(&mut self, ctx: &Constructors, lc: &LocalContext, depth: u32) {
+
+impl<'a> Formula<'a> {
+  pub fn distribute_quantifiers(&mut self, ctx: &Constructors, lc: &LocalContext, depth: u32, bump: &'a bumpalo::Bump) {
+
     loop {
       match self {
         Formula::Neg { f: arg } => {
-          arg.distribute_quantifiers(ctx, lc, depth);
+          arg.distribute_quantifiers(ctx, lc, depth, bump);
           if let Formula::Neg { f: f2 } = &mut **arg {
             *self = std::mem::take(&mut **f2)
           }
         }
-        Formula::And { args } =>
-          *self = Formula::mk_and_with(|conjs| {
-            for mut f in std::mem::take(args) {
-              f.distribute_quantifiers(ctx, lc, depth);
-              f.append_conjuncts_to(conjs)
-            }
-          }),
+        Formula::And { args } => args.iter_mut().for_each(|f| f.distribute_quantifiers(ctx, lc, depth, bump)),
         Formula::ForAll { id, dom, scope } => {
           ExpandPrivFunc(ctx, lc).visit_type(dom);
-          scope.distribute_quantifiers(ctx, lc, depth + 1);
+          scope.distribute_quantifiers(ctx, lc, depth + 1, bump);
           if let Formula::And { args } = &mut **scope {
             for f in args {
               let mut nontrivial = false;
               f.visit(&mut OnVarMut(|nr| nontrivial |= *nr == depth));
               if nontrivial {
                 *f =
-                  Formula::ForAll { id: *id, dom: dom.clone(), scope: Box::new(std::mem::take(f)) }
+                  Formula::ForAll { id: *id, dom: dom.clone(), scope: bumpalo::boxed::Box::new_in(std::mem::take(f), bump) }
               } else {
                 f.visit(&mut OnVarMut(|nr| {
                   if *nr > depth {
@@ -434,6 +443,7 @@ impl Formula {
   }
 }
 
+
 pub trait Open {
   fn mk_var(n: u32) -> Term;
   fn base(&self) -> u32;
@@ -441,35 +451,31 @@ pub trait Open {
 
   /// * pos = true: RemoveIntQuantifier
   /// * pos = false: RemoveExtQuantifier
-  fn open_quantifiers(&mut self, fmla: &mut Formula, pos: bool) {
+  fn open_quantifiers<'a>(&mut self, fmla: &mut Formula<'a>, pos: bool, bump: &'a bumpalo::Bump) {
     loop {
       match fmla {
         Formula::Neg { f } => {
-          self.open_quantifiers(f, !pos);
+          self.open_quantifiers(f, !pos, bump);
           if let Formula::Neg { f } = &mut **f {
-            *fmla = std::mem::take(f);
+            *fmla = std::mem::take(&mut **f);
           }
         }
-        Formula::And { args } =>
-          *fmla = Formula::mk_and_with(|conjs| {
-            for mut f in std::mem::take(args) {
-              self.open_quantifiers(&mut f, pos);
-              f.append_conjuncts_to(conjs)
-            }
-          }),
+        Formula::And { args } => args.iter_mut().for_each(|f| self.open_quantifiers(f, pos, bump)),
+
         Formula::ForAll { id, dom, scope } =>
           if !pos {
             let mut set_var = SetVar::new(self, 1);
             self.new_var(*id, std::mem::take(&mut **dom));
-            let mut f = std::mem::take(scope);
-            while let Formula::ForAll { id, mut dom, scope } = *f {
+            let mut f = scope.clone_in(bump);
+            while let Formula::ForAll { id, mut dom, scope } = f {
               set_var.visit_type(&mut dom);
               self.new_var(id, *dom);
               set_var.depth += 1;
-              f = scope
+              f = bumpalo::boxed::Box::into_inner(scope);
             }
+
             set_var.visit_formula(&mut f);
-            *fmla = *f;
+            *fmla = f;
             continue
           },
         Formula::LegacyFlexAnd { .. }
@@ -484,6 +490,7 @@ pub trait Open {
       return
     }
   }
+
 }
 
 struct OpenAsConst<'a, 'b>(&'b mut Checker<'a>);
@@ -524,20 +531,22 @@ impl<O: Open + ?Sized> VisitMut for SetVar<O> {
 }
 
 #[derive(Default, Debug)]
-pub struct Atoms(pub IdxVec<AtomId, Formula>);
+pub struct Atoms<'a>(pub IdxVec<AtomId, Formula<'a>>);
 
-impl Atoms {
-  pub fn find(&self, g: &Global, lc: &LocalContext, f: &Formula) -> Option<AtomId> {
+impl<'a> Atoms<'a> {
+  pub fn find(&self, g: &Global, lc: &LocalContext, f: &Formula<'a>) -> Option<AtomId> {
     self.0.enum_iter().find(|(_, atom)| g.eq(lc, f, atom)).map(|p| p.0)
   }
 
-  pub fn insert(&mut self, g: &Global, lc: &LocalContext, f: Cow<'_, Formula>) -> AtomId {
+  pub fn insert(&mut self, g: &Global, lc: &LocalContext, f: Formula<'a>) -> AtomId {
     match self.find(g, lc, &f) {
       Some(i) => i,
-      None => self.0.push(f.into_owned()),
+      None => self.0.push(f),
     }
   }
+
 }
+
 
 /// A conjunction is a map from atoms to true or false, so
 /// `{a: true, b: false, c: true}` represents `a /\ ~b /\ c`.
@@ -797,7 +806,8 @@ impl Atoms {
       }
       Formula::True => Ok(Dnf::mk_bool(pos)),
       _ => {
-        let a = self.insert(g, lc, Cow::Owned(f));
+        let a = self.insert(g, lc, f);
+
         Ok(Dnf::Or(vec![Conjunct::single(a, pos)]))
       }
     }
@@ -845,7 +855,8 @@ impl<'a> SchemeCtx<'a> {
     }
   }
 
-  fn eq_formula(&mut self, f1: &Formula, f2: &Formula, pos: bool) -> bool {
+  fn eq_formula<'b>(&mut self, f1: &Formula<'b>, f2: &Formula<'b>, pos: bool) -> bool {
+
     use Formula::*;
     // vprintln!("sch {pos}. {f1:?} <> {f2:?}");
     let res = match (f1, f2) {
@@ -1066,8 +1077,9 @@ impl<'a> SchemeCtx<'a> {
     n1 == n2 && a1.pos == a2.pos && self.eq_terms(args1, args2)
   }
 
-  fn eq_formulas(&mut self, args1: &[Formula], args2: &[Formula]) -> bool {
+  fn eq_formulas<'b>(&mut self, args1: &[Formula<'b>], args2: &[Formula<'b>]) -> bool {
     args1.len() == args2.len()
       && args1.iter().zip(args2).all(|(f1, f2)| self.eq_formula(f1, f2, true))
   }
+
 }

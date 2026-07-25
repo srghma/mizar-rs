@@ -2,7 +2,7 @@ use crate::accom::SigBuilder;
 use crate::VisitMut;
 use enum_map::{Enum, EnumMap};
 use paste::paste;
-use serde::Serialize;
+use serde::Serialize as SerializeTrait;
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -80,7 +80,7 @@ impl<I, T: PartialEq> PartialEq for IdxVec<I, T> {
 }
 impl<I, T: Eq> Eq for IdxVec<I, T> {}
 
-impl<I, T: Serialize> Serialize for IdxVec<I, T> {
+impl<I, T: SerializeTrait> SerializeTrait for IdxVec<I, T> {
   fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
   where S: serde::Serializer {
     self.0.serialize(serializer)
@@ -571,9 +571,10 @@ impl RequirementIndexes {
 
   pub fn get_raw(&self, req: Requirement) -> Option<u32> { self.fwd[req].checked_sub(1) }
 
-  pub fn mk_eq(&self, t1: Term, t2: Term) -> Formula {
+  pub fn mk_eq<'a>(&self, t1: Term<'a>, t2: Term<'a>) -> Formula<'a> {
     Formula::Pred { nr: self.equals_to().unwrap(), args: Box::new([t1, t2]) }
   }
+
 }
 
 pub trait Visitable<V> {
@@ -621,10 +622,10 @@ impl<V, A: Visitable<V>, B: Visitable<V>> Visitable<V> for (A, B) {
 }
 
 /// This type alias is used to indicate that the term might have a Qua at the top level.
-pub type TermQua = Term;
+pub type TermQua<'a> = Term<'a>;
 
 #[derive(Clone, PartialEq, Eq)]
-pub enum Term {
+pub enum Term<'a> {
   /// Invariant: nr != 0. Zero is not a numeral (!),
   /// it is a `Functor` using Requirement::ZeroNumber
   Numeral(u32),
@@ -642,52 +643,52 @@ pub enum Term {
   Infer(InferId),
   SchFunc {
     nr: SchFuncId,
-    args: Box<[Term]>,
+    args: Box<[Term<'a>]>,
   },
   Aggregate {
     nr: AggrId,
-    args: Box<[Term]>,
+    args: Box<[Term<'a>]>,
   },
   PrivFunc {
     nr: PrivFuncId,
-    args: Box<[Term]>,
-    value: Box<Term>,
+    args: Box<[Term<'a>]>,
+    value: Box<Term<'a>>,
   },
   Functor {
     nr: FuncId,
-    args: Box<[Term]>,
+    args: Box<[Term<'a>]>,
   },
   Selector {
     nr: SelId,
-    args: Box<[Term]>,
+    args: Box<[Term<'a>]>,
   },
   FreeVar(FVarId),
   The {
-    ty: Box<Type>,
+    ty: Box<Type<'a>>,
   },
   Fraenkel {
-    args: Box<[(IdentId, Type)]>,
-    scope: Box<Term>,
-    compr: Box<Formula>,
+    args: Box<[(IdentId, Type<'a>)]>,
+    scope: Box<Term<'a>>,
+    compr: Box<Formula<'a>>,
   },
   /// Only used/valid in the analyzer, at the top level of a term expression.
   /// Indicates that the term should be treated as having type `ty` instead
   /// of looking at `term`'s type.
   Qua {
-    value: Box<Term>,
-    ty: Box<Type>,
+    value: Box<Term<'a>>,
+    ty: Box<Type<'a>>,
   },
   /// Only used/valid in the analyzer. Used in definiens that are predicates,
   /// to refer to the object being defined.
   It,
 }
 
-impl Default for Term {
+impl<'a> Default for Term<'a> {
   fn default() -> Self { Self::Numeral(0) }
 }
 
-impl Term {
-  pub fn args(&self) -> Option<&[Term]> {
+impl<'a> Term<'a> {
+  pub fn args(&self) -> Option<&[Term<'a>]> {
     match self {
       Term::SchFunc { args, .. }
       | Term::Aggregate { args, .. }
@@ -704,13 +705,13 @@ impl Term {
     }
   }
 
-  pub fn strip_qua(self: TermQua) -> Term {
+  pub fn strip_qua(self: TermQua<'a>) -> Term<'a> {
     match self {
       Term::Qua { value, .. } => *value,
       _ => self,
     }
   }
-  pub fn unqua(&self) -> &Term {
+  pub fn unqua(&self) -> &Term<'a> {
     match self {
       Term::Qua { value, .. } => value,
       _ => self,
@@ -718,11 +719,11 @@ impl Term {
   }
 }
 
-impl<V: VisitMut> Visitable<V> for Term {
+impl<'a, V: VisitMut> Visitable<V> for Term<'a> {
   fn visit(&mut self, v: &mut V) { v.visit_term(self) }
 }
 
-impl Term {
+impl<'a> Term<'a> {
   pub fn discr(&self) -> u8 {
     match self {
       Term::Locus(_) => b'A',
@@ -747,22 +748,22 @@ impl Term {
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
-pub struct Type {
+pub struct Type<'a> {
   /// The kind of type (either Mode or Struct), and the id
   pub kind: TypeKind,
   /// The first is the attributes written by the user ("lower cluster"),
   /// the second is the attributes calculated by the system ("upper cluster")
   pub attrs: (Attrs, Attrs),
   /// The mode arguments (ModArgs)
-  pub args: Vec<Term>,
+  pub args: Vec<Term<'a>>,
 }
 
-impl Type {
+impl<'a> Type<'a> {
   pub const fn new(kind: TypeKind) -> Self {
     Self { kind, attrs: (Attrs::EMPTY, Attrs::EMPTY), args: vec![] }
   }
-  pub const ANY: Type = Type::new(TypeKind::Mode(ModeId::ANY));
-  pub const SET: Type = Type::new(TypeKind::Mode(ModeId::SET));
+  pub const ANY: Type<'static> = Type::new(TypeKind::Mode(ModeId::ANY));
+  pub const SET: Type<'static> = Type::new(TypeKind::Mode(ModeId::SET));
 
   /// precondition: the type has kind Struct
   pub fn struct_id(&self) -> StructId {
@@ -773,7 +774,7 @@ impl Type {
   }
 }
 
-impl<V: VisitMut> Visitable<V> for Type {
+impl<'a, V: VisitMut> Visitable<V> for Type<'a> {
   fn visit(&mut self, v: &mut V) { v.visit_type(self) }
 }
 
@@ -813,68 +814,70 @@ impl TypeKind {
   }
 }
 
-#[derive(Clone, Default, PartialEq, Eq)]
-pub enum Formula {
+#[derive(Default, PartialEq, Eq, Debug)]
+pub enum Formula<'a> {
+
+
   SchPred {
     nr: SchPredId,
-    args: Box<[Term]>,
+    args: Box<[Term<'a>]>,
   },
   Pred {
     nr: PredId,
-    args: Box<[Term]>,
+    args: Box<[Term<'a>]>,
   },
   Attr {
     nr: AttrId,
     /// Invariant: args is not empty
-    args: Box<[Term]>,
+    args: Box<[Term<'a>]>,
   },
   PrivPred {
     nr: PrivPredId,
-    args: Box<[Term]>,
-    value: Box<Formula>,
+    args: Box<[Term<'a>]>,
+    value: bumpalo::boxed::Box<'a, Formula<'a>>,
   },
   /// ikFrmQual
   Is {
-    term: Box<Term>,
-    ty: Box<Type>,
+    term: Box<Term<'a>>,
+    ty: Box<Type<'a>>,
   },
   Neg {
     /// Invariant: the formula is not Neg
-    f: Box<Formula>,
+    f: bumpalo::boxed::Box<'a, Formula<'a>>,
   },
   /// ikFrmConj
   And {
     /// Invariant: args.len() > 1 and does not contain And expressions
-    args: Vec<Formula>,
+    args: bumpalo::collections::Vec<'a, Formula<'a>>,
   },
   /// ikFrmUniv
   ForAll {
     id: IdentId,
-    dom: Box<Type>,
-    scope: Box<Formula>,
+    dom: Box<Type<'a>>,
+    scope: bumpalo::boxed::Box<'a, Formula<'a>>,
   },
   /// ikFrmFlexConj
   FlexAnd {
-    nat: Box<Type>,
+    nat: Box<Type<'a>>,
     le: PredId,
-    terms: Box<[Term; 2]>,
-    scope: Box<Formula>,
+    terms: Box<[Term<'a>; 2]>,
+    scope: bumpalo::boxed::Box<'a, Formula<'a>>,
   },
   LegacyFlexAnd {
-    orig: Box<[Formula; 2]>,
-    terms: Box<[Term; 2]>,
-    expansion: Box<Formula>,
+    orig: bumpalo::boxed::Box<'a, [Formula<'a>; 2]>,
+    terms: Box<[Term<'a>; 2]>,
+    expansion: bumpalo::boxed::Box<'a, Formula<'a>>,
   },
   /// ikFrmVerum
   #[default]
   True,
 }
 
-impl<V: VisitMut> Visitable<V> for Formula {
+impl<'a, V: VisitMut> Visitable<V> for Formula<'a> {
   fn visit(&mut self, v: &mut V) { v.visit_formula(self) }
 }
 
-impl Formula {
+impl<'a> Formula<'a> {
   pub fn discr(&self) -> u8 {
     match self {
       Formula::SchPred { .. } => b'P',
@@ -890,33 +893,89 @@ impl Formula {
       // Formula::Thesis => b'$',
     }
   }
+}
 
-  pub fn mk_neg(self) -> Self {
+#[derive(Debug)]
+pub enum CowFormula<'a> {
+  Borrowed(&'a Formula<'a>),
+  Owned(Formula<'a>),
+}
+impl<'a> std::ops::Deref for CowFormula<'a> {
+  type Target = Formula<'a>;
+  fn deref(&self) -> &Self::Target {
     match self {
-      Formula::Neg { f } => *f,
-      _ => Formula::Neg { f: Box::new(self) },
+      CowFormula::Borrowed(f) => f,
+      CowFormula::Owned(f) => f,
+    }
+  }
+}
+
+impl<'a> Formula<'a> {
+  pub fn clone_in(&self, bump: &'a bumpalo::Bump) -> Self {
+    match self {
+      Formula::SchPred { nr, args } => Formula::SchPred { nr: *nr, args: args.clone() },
+      Formula::Pred { nr, args } => Formula::Pred { nr: *nr, args: args.clone() },
+      Formula::Attr { nr, args } => Formula::Attr { nr: *nr, args: args.clone() },
+      Formula::PrivPred { nr, args, value } => Formula::PrivPred {
+        nr: *nr,
+        args: args.clone(),
+        value: bumpalo::boxed::Box::new_in(value.clone_in(bump), bump),
+      },
+      Formula::Is { term, ty } => Formula::Is { term: term.clone(), ty: ty.clone() },
+      Formula::Neg { f } => Formula::Neg {
+        f: bumpalo::boxed::Box::new_in(f.clone_in(bump), bump),
+      },
+      Formula::And { args } => Formula::And {
+        args: bumpalo::collections::Vec::from_iter_in(args.iter().map(|f| f.clone_in(bump)), bump),
+      },
+      Formula::ForAll { id, dom, scope } => Formula::ForAll {
+        id: *id,
+        dom: dom.clone(),
+        scope: bumpalo::boxed::Box::new_in(scope.clone_in(bump), bump),
+      },
+      Formula::FlexAnd { nat, le, terms, scope } => Formula::FlexAnd {
+        nat: nat.clone(),
+        le: *le,
+        terms: terms.clone(),
+        scope: bumpalo::boxed::Box::new_in(scope.clone_in(bump), bump),
+      },
+      Formula::LegacyFlexAnd { orig, terms, expansion } => Formula::LegacyFlexAnd {
+        orig: bumpalo::boxed::Box::new_in([orig[0].clone_in(bump), orig[1].clone_in(bump)], bump),
+        terms: terms.clone(),
+        expansion: bumpalo::boxed::Box::new_in(expansion.clone_in(bump), bump),
+      },
+      Formula::True => Formula::True,
+    }
+  }
+
+  pub fn mk_neg(self, bump: &'a bumpalo::Bump) -> Self {
+    match self {
+      Formula::Neg { f } => bumpalo::boxed::Box::into_inner(f),
+      _ => Formula::Neg { f: bumpalo::boxed::Box::new_in(self, bump) },
     }
   }
 
   /// This calculates `self == pos`.
   /// That is, it negates `self` if `pos == false` and leaves it unchanged otherwise.
-  pub fn maybe_neg(self, pos: bool) -> Self {
+  pub fn maybe_neg(self, pos: bool, bump: &'a bumpalo::Bump) -> Self {
     if pos {
       self
     } else {
-      self.mk_neg()
+      self.mk_neg(bump)
     }
   }
 
   #[inline]
-  pub fn forall(id: IdentId, dom: Type, scope: Self) -> Self {
-    Self::ForAll { id, dom: Box::new(dom), scope: Box::new(scope) }
+  pub fn forall(id: IdentId, dom: Type, scope: Self, bump: &'a bumpalo::Bump) -> Self {
+    Self::ForAll { id, dom: Box::new(dom), scope: bumpalo::boxed::Box::new_in(scope, bump) }
   }
 
   #[inline]
-  pub fn forall0(dom: Type, scope: Self) -> Self { Self::forall(IdentId::NONE, dom, scope) }
+  pub fn forall0(dom: Type, scope: Self, bump: &'a bumpalo::Bump) -> Self {
+    Self::forall(IdentId::NONE, dom, scope, bump)
+  }
 
-  pub fn conjuncts(&self) -> &[Formula] {
+  pub fn conjuncts(&self) -> &[Formula<'a>] {
     match self {
       Formula::True => &[],
       Formula::And { args } => args,
@@ -924,66 +983,69 @@ impl Formula {
     }
   }
 
-  pub fn into_conjuncts(self) -> Vec<Formula> {
+  pub fn into_conjuncts(self, bump: &'a bumpalo::Bump) -> bumpalo::collections::Vec<'a, Formula<'a>> {
     match self {
-      Formula::True => vec![],
+      Formula::True => bumpalo::collections::Vec::new_in(bump),
       Formula::And { args } => args,
-      f => vec![f],
+      f => bumpalo::collections::Vec::from_iter_in([f], bump),
     }
   }
 
   // postcondition: the things pushed to vec are not And expressions
-  pub fn append_conjuncts_to(self, vec: &mut Vec<Formula>) {
+  pub fn append_conjuncts_to(
+    self, _bump: &'a bumpalo::Bump, vec: &mut bumpalo::collections::Vec<'a, Formula<'a>>,
+  ) {
     match self {
       Formula::True => {}
-      Formula::And { mut args } => vec.append(&mut args),
+      Formula::And { args } => vec.extend(args),
       f => vec.push(f),
     }
   }
 
   // Precondition: the args are not And expressions
-  pub fn mk_and(args: Vec<Formula>) -> Formula {
+  pub fn mk_and(mut args: bumpalo::collections::Vec<'a, Formula<'a>>, _bump: &'a bumpalo::Bump) -> Self {
     match args.len() {
       0 => Formula::True,
-      1 => { args }.pop().unwrap(),
+      1 => args.pop().unwrap(),
       _ => Formula::And { args },
     }
   }
 
   #[inline]
-  pub fn mk_and_with(f: impl FnOnce(&mut Vec<Formula>)) -> Formula {
-    let mut args = vec![];
+  pub fn mk_and_with(bump: &'a bumpalo::Bump, f: impl FnOnce(&mut bumpalo::collections::Vec<'a, Formula<'a>>)) -> Self {
+    let mut args = bumpalo::collections::Vec::new_in(bump);
     f(&mut args);
-    Self::mk_and(args)
+    Self::mk_and(args, bump)
   }
 
   /// * pos = true: constructs self && vec[0] && ... && vec[n-1]
   /// * pos = false: constructs self || vec[0] || ... || vec[n-1]
-  pub fn conjdisj_many(&mut self, pos: bool, vec: Vec<Formula>) {
+  pub fn conjdisj_many(&mut self, pos: bool, vec: bumpalo::collections::Vec<'a, Formula<'a>>, bump: &'a bumpalo::Bump) {
     if !vec.is_empty() {
-      *self = Formula::mk_and_with(|conjs| {
-        std::mem::take(self).maybe_neg(pos).append_conjuncts_to(conjs);
-        vec.into_iter().for_each(|f| f.maybe_neg(pos).append_conjuncts_to(conjs));
+      *self = Formula::mk_and_with(bump, |conjs| {
+        std::mem::take(self).maybe_neg(pos, bump).append_conjuncts_to(bump, conjs);
+        vec.into_iter().for_each(|f| f.maybe_neg(pos, bump).append_conjuncts_to(bump, conjs));
       })
-      .maybe_neg(pos);
+      .maybe_neg(pos, bump);
     }
   }
 
-  pub fn mk_iff(self, other: Formula) -> Formula {
-    Formula::mk_and_with(|conjs| {
-      let f1 = Formula::mk_and_with(|conjs1| {
-        self.clone().append_conjuncts_to(conjs1);
-        other.clone().mk_neg().append_conjuncts_to(conjs1);
+  pub fn mk_iff(self, other: Formula<'a>, bump: &'a bumpalo::Bump) -> Self {
+    Formula::mk_and_with(bump, |conjs| {
+      let f1 = Formula::mk_and_with(bump, |conjs1| {
+        self.clone_in(bump).append_conjuncts_to(bump, conjs1);
+        other.clone_in(bump).mk_neg(bump).append_conjuncts_to(bump, conjs1);
       });
-      f1.mk_neg().append_conjuncts_to(conjs);
-      let f2 = Formula::mk_and_with(|conjs2| {
-        other.append_conjuncts_to(conjs2);
-        self.mk_neg().append_conjuncts_to(conjs2);
+      f1.mk_neg(bump).append_conjuncts_to(bump, conjs);
+      let f2 = Formula::mk_and_with(bump, |conjs2| {
+        other.append_conjuncts_to(bump, conjs2);
+        self.mk_neg(bump).append_conjuncts_to(bump, conjs2);
       });
-      f2.mk_neg().append_conjuncts_to(conjs);
+      f2.mk_neg(bump).append_conjuncts_to(bump, conjs);
     })
   }
 }
+
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum Attrs {
@@ -1728,12 +1790,12 @@ impl<V: VisitMut, T: Visitable<V>> Visitable<V> for DefBody<T> {
   }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DefValue {
+#[derive(Debug, PartialEq, Eq)]
+pub enum DefValue<'a> {
   Term(DefBody<Term>),
-  Formula(DefBody<Formula>),
+  Formula(DefBody<Formula<'a>>),
 }
-impl<V: VisitMut> Visitable<V> for DefValue {
+impl<'a, V: VisitMut> Visitable<V> for DefValue<'a> {
   fn visit(&mut self, v: &mut V) {
     match self {
       DefValue::Term(body) => body.visit(v),
@@ -1742,30 +1804,52 @@ impl<V: VisitMut> Visitable<V> for DefValue {
   }
 }
 
-impl DefValue {
+impl<'a> DefValue<'a> {
   pub fn discr(&self) -> u8 {
     match self {
       DefValue::Term(_) => b'e',
       DefValue::Formula(_) => b'm',
     }
   }
+
+  pub fn clone_in(&self, bump: &'a bumpalo::Bump) -> DefValue<'a> {
+    match self {
+      DefValue::Term(b) => DefValue::Term(b.clone()),
+      DefValue::Formula(b) => DefValue::Formula(DefBody {
+        cases: b.cases.iter().map(|c| DefCase { case: c.case.clone_in(bump), guard: c.guard.clone_in(bump) }).collect(),
+        otherwise: b.otherwise.as_ref().map(|f| f.clone_in(bump)),
+      }),
+    }
+  }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Definiens {
+#[derive(Debug, PartialEq, Eq)]
+pub struct Definiens<'a> {
   pub c: ConstrDef,
   // pub lab_id: Option<LabelId>,
   pub essential: Box<[LocusId]>,
-  pub assumptions: Formula,
-  pub value: DefValue,
+  pub assumptions: Formula<'a>,
+  pub value: DefValue<'a>,
 }
 
-impl std::ops::Deref for Definiens {
+impl<'a> Definiens<'a> {
+  pub fn clone_in(&self, bump: &'a bumpalo::Bump) -> Definiens<'a> {
+    Definiens {
+      c: self.c.clone(),
+      essential: self.essential.clone(),
+      assumptions: self.assumptions.clone_in(bump),
+      value: self.value.clone_in(bump),
+    }
+  }
+}
+
+
+impl<'a> std::ops::Deref for Definiens<'a> {
   type Target = ConstrDef;
   fn deref(&self) -> &Self::Target { &self.c }
 }
 
-impl<V: VisitMut> Visitable<V> for Definiens {
+impl<'a, V: VisitMut> Visitable<V> for Definiens<'a> {
   fn visit(&mut self, v: &mut V) {
     self.c.constr.visit(v);
     v.with_locus_tys(&mut self.c.primary, |v| {
@@ -1846,13 +1930,24 @@ pub struct References {
   pub sch: HashSet<SchRef>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Scheme {
+#[derive(Debug, PartialEq, Eq)]
+pub struct Scheme<'a> {
   pub sch_funcs: Box<[Type]>,
-  pub prems: Box<[Formula]>,
-  pub thesis: Formula,
+  pub prems: Box<[Formula<'a>]>,
+  pub thesis: Formula<'a>,
 }
-impl<V: VisitMut> Visitable<V> for Scheme {
+
+impl<'a> Scheme<'a> {
+  pub fn clone_in(&self, bump: &'a bumpalo::Bump) -> Scheme<'a> {
+    Scheme {
+      sch_funcs: self.sch_funcs.clone(),
+      prems: self.prems.iter().map(|f| f.clone_in(bump)).collect(),
+      thesis: self.thesis.clone_in(bump),
+    }
+  }
+}
+
+impl<'a, V: VisitMut> Visitable<V> for Scheme<'a> {
   fn visit(&mut self, v: &mut V) {
     v.with_sch_func_tys(&mut self.sch_funcs, |v| {
       self.prems.visit(v);
@@ -1861,19 +1956,21 @@ impl<V: VisitMut> Visitable<V> for Scheme {
   }
 }
 
+
 #[derive(Default, Debug)]
-pub struct Libraries {
-  pub thm: BTreeMap<ThmRef, Formula>,
-  pub def: BTreeMap<DefRef, Formula>,
-  pub sch: BTreeMap<SchRef, Scheme>,
+pub struct Libraries<'a> {
+  pub thm: BTreeMap<ThmRef, Formula<'a>>,
+  pub def: BTreeMap<DefRef, Formula<'a>>,
+  pub sch: BTreeMap<SchRef, Scheme<'a>>,
 }
-impl<V: VisitMut> Visitable<V> for Libraries {
+impl<'a, V: VisitMut> Visitable<V> for Libraries<'a> {
   fn visit(&mut self, v: &mut V) {
     self.thm.values_mut().for_each(|f| f.visit(v));
     self.def.values_mut().for_each(|f| f.visit(v));
     self.sch.values_mut().for_each(|f| f.visit(v));
   }
 }
+
 
 #[derive(Copy, Clone, Default, Eq)]
 pub struct Position {
@@ -1946,19 +2043,19 @@ pub struct Inference {
 }
 
 #[derive(Debug)]
-pub struct Thesis {
-  pub f: Formula,
+pub struct Thesis<'a> {
+  pub f: Formula<'a>,
   pub exps: Vec<(u32, u32)>,
 }
 
 #[derive(Debug)]
-pub enum Justification {
+pub enum Justification<'a> {
   Simple(Inference),
   Proof {
     pos: (Position, Position),
     label: Option<LabelId>,
-    thesis: Formula,
-    items: Vec<(Item, Option<Thesis>)>,
+    thesis: Formula<'a>,
+    items: Vec<(Item<'a>, Option<Thesis<'a>>)>,
   },
   SkippedProof,
 }
@@ -1996,48 +2093,54 @@ impl<V: VisitMut> Visitable<V> for ClusterDeclKind {
 }
 
 #[derive(Debug)]
-pub struct ClusterDecl {
+pub struct ClusterDecl<'a> {
   pub kind: ClusterDeclKind,
-  pub conds: Vec<CorrCond>,
-  pub corr: Option<Correctness>,
+  pub conds: Vec<CorrCond<'a>>,
+  pub corr: Option<Correctness<'a>>,
 }
 
 #[derive(Debug)]
-pub struct JustifiedProperty {
+pub struct JustifiedProperty<'a> {
   pub kind: PropertyKind,
-  pub prop: Proposition,
-  pub just: Justification,
+  pub prop: Proposition<'a>,
+  pub just: Justification<'a>,
 }
 
 #[derive(Debug)]
-pub struct Definition {
+pub struct Definition<'a> {
   pub pos: Position,
   pub label: Option<LabelId>,
   pub redef: bool,
   pub kind: DefinitionKind,
-  pub conds: Vec<CorrCond>,
-  pub corr: Option<Correctness>,
-  pub props: Vec<JustifiedProperty>,
+  pub conds: Vec<CorrCond<'a>>,
+  pub corr: Option<Correctness<'a>>,
+  pub props: Vec<JustifiedProperty<'a>>,
   pub constr: Option<ConstructorDef>,
   pub patts: Vec<Pattern>,
 }
 
 #[derive(Debug)]
-pub struct DefStruct {
+pub struct DefStruct<'a> {
   pub pos: Position,
   pub constrs: Vec<ConstructorDef>,
-  pub cl: ClusterDecl,
+  pub cl: ClusterDecl<'a>,
   pub patts: Vec<Pattern>,
 }
 
-#[derive(Clone)]
-pub struct Proposition {
+pub struct Proposition<'a> {
   pub pos: Position,
   pub label: Option<LabelId>,
-  pub f: Formula,
+  pub f: Formula<'a>,
 }
 
-impl std::fmt::Debug for Proposition {
+impl<'a> Proposition<'a> {
+  pub fn clone_in(&self, bump: &'a bumpalo::Bump) -> Proposition<'a> {
+    Proposition { pos: self.pos, label: self.label, f: self.f.clone_in(bump) }
+  }
+}
+
+
+impl<'a> std::fmt::Debug for Proposition<'a> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     write!(f, "[{:?}] ", self.pos)?;
     if let Some(id) = self.label {
@@ -2046,16 +2149,16 @@ impl std::fmt::Debug for Proposition {
     write!(f, "{:?}", self.f)
   }
 }
-impl<V: VisitMut> Visitable<V> for Proposition {
+impl<'a, V: VisitMut> Visitable<V> for Proposition<'a> {
   fn visit(&mut self, v: &mut V) { self.f.visit(v) }
 }
 #[derive(Debug)]
-pub enum Statement {
-  Proposition { prop: Proposition, just: Justification },
+pub enum Statement<'a> {
+  Proposition { prop: Proposition<'a>, just: Justification<'a> },
   IterEquality { start: Position, label: Option<LabelId>, lhs: Term, steps: Vec<(Term, Inference)> },
-  Now { pos: (Position, Position), label: Option<LabelId>, thesis: Formula, items: Box<[Item]> },
+  Now { pos: (Position, Position), label: Option<LabelId>, thesis: Formula<'a>, items: Box<[Item<'a>]> },
 }
-impl Statement {
+impl<'a> Statement<'a> {
   pub fn pos(&self) -> Position {
     match self {
       Statement::Proposition { prop, .. } => prop.pos,
@@ -2066,21 +2169,21 @@ impl Statement {
 }
 
 #[derive(Debug)]
-pub struct GivenItem {
-  pub prop: Proposition,
+pub struct GivenItem<'a> {
+  pub prop: Proposition<'a>,
   pub fixed: Vec<(IdentId, Type)>,
-  pub intro: Vec<Proposition>,
+  pub intro: Vec<Proposition<'a>>,
 }
 
 #[derive(Debug)]
-pub enum AuxiliaryItem {
-  Statement(Statement),
+pub enum AuxiliaryItem<'a> {
+  Statement(Statement<'a>),
   /// itChoice
   Consider {
-    prop: Proposition,
-    just: Justification,
+    prop: Proposition<'a>,
+    just: Justification<'a>,
     fixed: Vec<(IdentId, Type)>,
-    intro: Vec<Proposition>,
+    intro: Vec<Proposition<'a>>,
   },
   /// itConstantDefinition
   Set {
@@ -2090,8 +2193,8 @@ pub enum AuxiliaryItem {
   },
   Reconsider {
     terms: Vec<(IdentId, Type, Term)>,
-    prop: Proposition,
-    just: Justification,
+    prop: Proposition<'a>,
+    just: Justification<'a>,
   },
   /// itPrivFuncDefinition
   DefFunc {
@@ -2102,10 +2205,10 @@ pub enum AuxiliaryItem {
   /// itPrivPredDefinition
   DefPred {
     args: Box<[Type]>,
-    value: Formula,
+    value: Formula<'a>,
   },
 }
-impl AuxiliaryItem {
+impl<'a> AuxiliaryItem<'a> {
   pub fn pos(&self) -> Option<Position> {
     match self {
       AuxiliaryItem::Statement(stmt) => Some(stmt.pos()),
@@ -2119,14 +2222,14 @@ impl AuxiliaryItem {
 }
 
 #[derive(Debug)]
-pub enum Registration {
-  Cluster(ClusterDecl),
-  Identify { kind: IdentifyFunc, conds: Vec<CorrCond>, corr: Option<Correctness> },
-  Reduction { kind: Reduction, conds: Vec<CorrCond>, corr: Option<Correctness> },
-  Property { kind: Property, prop: Proposition, just: Justification },
+pub enum Registration<'a> {
+  Cluster(ClusterDecl<'a>),
+  Identify { kind: IdentifyFunc, conds: Vec<CorrCond<'a>>, corr: Option<Correctness<'a>> },
+  Reduction { kind: Reduction, conds: Vec<CorrCond<'a>>, corr: Option<Correctness<'a>> },
+  Property { kind: Property, prop: Proposition<'a>, just: Justification<'a> },
 }
 
-#[derive(Clone, Copy, Debug, Enum, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Enum, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CorrCondKind {
   Coherence,
   Compatibility,
@@ -2176,33 +2279,33 @@ impl TryFrom<&[u8]> for CorrCondKind {
 }
 
 #[derive(Debug)]
-pub struct SimpleCorrCond {
+pub struct SimpleCorrCond<'a> {
   pub kind: CorrCondKind,
-  pub f: Formula,
+  pub f: Formula<'a>,
 }
 
 #[derive(Debug)]
-pub struct CorrCond {
+pub struct CorrCond<'a> {
   pub kind: CorrCondKind,
-  pub prop: Proposition,
-  pub just: Justification,
+  pub prop: Proposition<'a>,
+  pub just: Justification<'a>,
 }
 
 #[derive(Debug)]
-pub struct Correctness {
-  pub conds: Vec<SimpleCorrCond>,
-  pub prop: Proposition,
-  pub just: Justification,
+pub struct Correctness<'a> {
+  pub conds: Vec<SimpleCorrCond<'a>>,
+  pub prop: Proposition<'a>,
+  pub just: Justification<'a>,
 }
 
 #[derive(Debug)]
-pub struct SchemeBlock {
+pub struct SchemeBlock<'a> {
   pub pos: (Position, Position),
   pub nr: SchId,
   pub decls: Vec<SchemeDecl>,
-  pub prems: Vec<Proposition>,
-  pub thesis: Proposition,
-  pub just: Justification,
+  pub prems: Vec<Proposition<'a>>,
+  pub thesis: Proposition<'a>,
+  pub just: Justification<'a>,
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
@@ -2223,28 +2326,28 @@ impl CancelKind {
 }
 
 #[derive(Debug)]
-pub enum CaseKind {
-  Case(Vec<Proposition>),
-  Suppose(Vec<Proposition>),
+pub enum CaseKind<'a> {
+  Case(Vec<Proposition<'a>>),
+  Suppose(Vec<Proposition<'a>>),
 }
 
 #[derive(Debug)]
-pub struct CaseBlock {
+pub struct CaseBlock<'a> {
   pub pos: (Position, Position),
-  pub block_thesis: Formula,
-  pub cs: CaseKind,
-  pub items: Vec<(Item, Option<Thesis>)>,
-  pub thesis: Option<Thesis>,
+  pub block_thesis: Formula<'a>,
+  pub cs: CaseKind<'a>,
+  pub items: Vec<(Item<'a>, Option<Thesis<'a>>)>,
+  pub thesis: Option<Thesis<'a>>,
 }
 
 #[derive(Debug)]
-pub struct PerCases {
+pub struct PerCases<'a> {
   pub pos: (Position, Position),
-  pub block_thesis: Formula,
-  pub cases: Vec<CaseBlock>,
-  pub prop: Proposition,
-  pub just: Justification,
-  pub thesis: Option<Thesis>,
+  pub block_thesis: Formula<'a>,
+  pub cases: Vec<CaseBlock<'a>>,
+  pub prop: Proposition<'a>,
+  pub just: Justification<'a>,
+  pub thesis: Option<Thesis<'a>>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2265,16 +2368,16 @@ impl BlockKind {
 }
 
 #[derive(Debug)]
-pub enum Item {
+pub enum Item<'a> {
   /// itGeneralization
   Let(Vec<(IdentId, Type)>),
   /// itExistentialAssumption
-  Given(GivenItem),
+  Given(GivenItem<'a>),
   /// itConclusion
-  Thus(Statement),
+  Thus(Statement<'a>),
   /// itAssumption
   /// invariant: not empty
-  Assume(Vec<Proposition>),
+  Assume(Vec<Proposition<'a>>),
   /// itSimpleExemplification
   Take(Term),
   /// itExemplificationWithEquality
@@ -2283,35 +2386,35 @@ pub enum Item {
     ty: Type,
     tm: Term,
   },
-  PerCases(PerCases),
-  Auxiliary(AuxiliaryItem),
-  Registration(Registration),
-  Scheme(SchemeBlock),
+  PerCases(PerCases<'a>),
+  Auxiliary(AuxiliaryItem<'a>),
+  Registration(Registration<'a>),
+  Scheme(SchemeBlock<'a>),
   Theorem {
-    prop: Proposition,
-    just: Justification,
+    prop: Proposition<'a>,
+    just: Justification<'a>,
   },
   DefTheorem {
     kind: Option<ConstrKind>,
-    prop: Proposition,
+    prop: Proposition<'a>,
   },
   Reservation {
     ids: Vec<u32>,
     ty: Box<Type>,
   },
   Canceled(CancelKind),
-  Definition(Definition),
-  DefStruct(DefStruct),
-  Definiens(Definiens),
+  Definition(Definition<'a>),
+  DefStruct(DefStruct<'a>),
+  Definiens(Definiens<'a>),
   Pattern(Pattern),
   Block {
     kind: BlockKind,
     pos: (Position, Position),
-    items: Vec<Item>,
+    items: Vec<Item<'a>>,
   },
 }
 
-impl Item {
+impl<'a> Item<'a> {
   pub fn pos(&self) -> Option<Position> {
     match self {
       Item::Given(it) => Some(it.prop.pos),
@@ -2905,3 +3008,78 @@ pub struct Vocabulary<'a> {
   pub base: SymbolsBase,
   pub symbols: Vec<SymbolData<'a>>,
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_nested_quantifier_construction() {
+    let bump = bumpalo::Bump::new();
+    let base = Formula::True;
+    let f1 = Formula::ForAll {
+      id: IdentId(1),
+      dom: Box::new(Type::ANY),
+      scope: bumpalo::boxed::Box::new_in(base, &bump),
+    };
+    let f2 = Formula::ForAll {
+      id: IdentId(2),
+      dom: Box::new(Type::SET),
+      scope: bumpalo::boxed::Box::new_in(f1, &bump),
+    };
+    assert!(matches!(f2, Formula::ForAll { id: IdentId(2), .. }));
+  }
+
+  #[test]
+  fn test_formulas_every_recursive_variant() {
+    let bump = bumpalo::Bump::new();
+
+    let f_sch = Formula::SchPred { nr: SchPredId(1), args: Box::new([]) };
+    let f_pred = Formula::Pred { nr: PredId(2), args: Box::new([Term::Numeral(1)]) };
+    let f_attr = Formula::Attr { nr: AttrId(3), args: Box::new([Term::Numeral(2)]) };
+    let f_is = Formula::Is { term: Box::new(Term::Numeral(3)), ty: Box::new(Type::ANY) };
+    let f_true = Formula::True;
+
+    let f_priv = Formula::PrivPred {
+      nr: PrivPredId(4),
+      args: Box::new([]),
+      value: bumpalo::boxed::Box::new_in(f_sch.clone_in(&bump), &bump),
+    };
+
+    let f_neg = Formula::Neg {
+      f: bumpalo::boxed::Box::new_in(f_pred.clone_in(&bump), &bump),
+    };
+
+    let mut args = bumpalo::collections::Vec::new_in(&bump);
+    args.push(f_attr.clone_in(&bump));
+    args.push(f_is.clone_in(&bump));
+    args.push(f_true.clone_in(&bump));
+    let f_and = Formula::And { args };
+
+    let f_forall = Formula::ForAll {
+      id: IdentId(5),
+      dom: Box::new(Type::SET),
+      scope: bumpalo::boxed::Box::new_in(f_priv.clone_in(&bump), &bump),
+    };
+
+    let f_flex = Formula::FlexAnd {
+      nat: Box::new(Type::ANY),
+      le: PredId(6),
+      terms: Box::new([Term::Numeral(1), Term::Numeral(2)]),
+      scope: bumpalo::boxed::Box::new_in(f_neg.clone_in(&bump), &bump),
+    };
+
+    let f_legacy = Formula::LegacyFlexAnd {
+      orig: bumpalo::boxed::Box::new_in(
+        [f_and.clone_in(&bump), f_forall.clone_in(&bump)],
+        &bump,
+      ),
+      terms: Box::new([Term::Numeral(5), Term::Numeral(6)]),
+      expansion: bumpalo::boxed::Box::new_in(f_flex.clone_in(&bump), &bump),
+    };
+
+    let cloned_legacy = f_legacy.clone_in(&bump);
+    assert_eq!(f_legacy, cloned_legacy);
+  }
+}
+

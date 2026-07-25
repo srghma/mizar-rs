@@ -122,36 +122,42 @@ impl Global {
     self.constrs.struct_mode.enum_iter().find(|c| c.1.fields.contains(&sel)).unwrap().0
   }
 
-  pub fn expand_flex_and(
-    nat: Box<Type>, le: PredId, [t1, t2]: [Term; 2], scope: Box<Formula>, depth: u32,
-  ) -> Formula {
-    let f = Formula::mk_and_with(|conjs| {
+  pub fn expand_flex_and<'a>(
+    nat: Box<Type>, le: PredId, [t1, t2]: [Term; 2], scope: bumpalo::boxed::Box<'a, Formula<'a>>, depth: u32,
+    bump: &'a bumpalo::Bump,
+  ) -> Formula<'a> {
+    let f = Formula::mk_and_with(bump, |conjs| {
       conjs.push(Formula::Pred { nr: le, args: Box::new([t1, Term::Bound(BoundId(depth))]) });
       conjs.push(Formula::Pred { nr: le, args: Box::new([Term::Bound(BoundId(depth)), t2]) });
-      scope.mk_neg().append_conjuncts_to(conjs);
+      scope.clone_in(bump).mk_neg(bump).append_conjuncts_to(bump, conjs);
     });
-    Formula::ForAll { id: IdentId::NONE, dom: nat, scope: Box::new(f.mk_neg()) }
+    Formula::ForAll { id: IdentId::NONE, dom: nat, scope: bumpalo::boxed::Box::new_in(f.mk_neg(bump), bump) }
   }
 
-  pub fn into_legacy_flex_and(
-    nat: &mut Box<Type>, le: PredId, terms: &mut Box<[Term; 2]>, scope: &mut Box<Formula>,
-    depth: u32,
-  ) -> Formula {
-    let orig1 = (**scope).visit_cloned(&mut Inst0(depth, &terms[0]));
-    let orig2 = (**scope).visit_cloned(&mut Inst0(depth, &terms[1]));
-    let expansion = Box::new(Self::expand_flex_and(
+  pub fn into_legacy_flex_and<'a>(
+    nat: &mut Box<Type>, le: PredId, terms: &mut Box<[Term; 2]>, scope: &Formula<'a>,
+    depth: u32, bump: &'a bumpalo::Bump,
+  ) -> Formula<'a> {
+    let mut orig1 = scope.clone_in(bump);
+    orig1.visit(&mut Inst0(depth, &terms[0]));
+    let mut orig2 = scope.clone_in(bump);
+    orig2.visit(&mut Inst0(depth, &terms[1]));
+
+    let expansion = bumpalo::boxed::Box::new_in(Self::expand_flex_and(
       std::mem::take(nat),
       le,
       (**terms).clone(),
-      std::mem::take(scope),
+      bumpalo::boxed::Box::new_in(Formula::True, bump),
       depth,
-    ));
+      bump,
+    ), bump);
     Formula::LegacyFlexAnd {
-      orig: Box::new([orig1, orig2]),
+      orig: bumpalo::boxed::Box::new_in([orig1, orig2], bump),
       terms: std::mem::take(terms),
       expansion,
     }
   }
+
 }
 
 pub struct RoundUpTypes<'a> {
@@ -653,30 +659,29 @@ impl Formula {
     (nr, &args[c.superfluous as usize..])
   }
 
-  fn cmp(
-    &self, ctx: Option<&Constructors>, lc: Option<&LocalContext>, other: &Formula, style: CmpStyle,
+  fn cmp<'a>(
+    &self, ctx: Option<&Constructors>, lc: Option<&LocalContext>, other: &Formula<'a>, style: CmpStyle,
   ) -> Ordering {
     // vprintln!("{self:?} <?> {other:?}");
     self.discr().cmp(&other.discr()).then_with(|| {
-      use Formula::*;
       match (self, other) {
-        (True, True) => Ordering::Equal,
-        (Neg { f: f1 }, Neg { f: f2 }) => f1.cmp(ctx, lc, f2, style),
-        (Is { term: t1, ty: ty1 }, Is { term: t2, ty: ty2 }) =>
+        (Formula::True, Formula::True) => Ordering::Equal,
+        (Formula::Neg { f: f1 }, Formula::Neg { f: f2 }) => f1.cmp(ctx, lc, f2, style),
+        (Formula::Is { term: t1, ty: ty1 }, Formula::Is { term: t2, ty: ty2 }) =>
           t1.cmp(ctx, lc, t2, style).then_with(|| ty1.cmp(ctx, lc, ty2, style)),
-        (And { args: args1 }, And { args: args2 }) => args1
+        (Formula::And { args: args1 }, Formula::And { args: args2 }) => args1
           .len()
           .cmp(&args2.len())
           .then_with(|| Formula::cmp_list(ctx, lc, args1, args2, style)),
         (
-          SchPred { nr: SchPredId(n1), args: args1 },
-          SchPred { nr: SchPredId(n2), args: args2 },
+          Formula::SchPred { nr: SchPredId(n1), args: args1 },
+          Formula::SchPred { nr: SchPredId(n2), args: args2 },
         )
         | (
-          PrivPred { nr: PrivPredId(n1), args: args1, .. },
-          PrivPred { nr: PrivPredId(n2), args: args2, .. },
+          Formula::PrivPred { nr: PrivPredId(n1), args: args1, .. },
+          Formula::PrivPred { nr: PrivPredId(n2), args: args2, .. },
         ) => n1.cmp(n2).then_with(|| Term::cmp_list(ctx, lc, args1, args2, style)),
-        (Attr { nr: n1, args: args1 }, Attr { nr: n2, args: args2 }) => match style {
+        (Formula::Attr { nr: n1, args: args1 }, Formula::Attr { nr: n2, args: args2 }) => match style {
           CmpStyle::Red => {
             let (n1, args1) = Formula::adjust_attr(*n1, args1, ctx);
             let (n2, args2) = Formula::adjust_attr(*n2, args2, ctx);
@@ -684,7 +689,7 @@ impl Formula {
           }
           _ => n1.cmp(n2).then_with(|| Term::cmp_list(ctx, lc, args1, args2, style)),
         },
-        (Pred { nr: n1, args: args1 }, Pred { nr: n2, args: args2 }) => match style {
+        (Formula::Pred { nr: n1, args: args1 }, Formula::Pred { nr: n2, args: args2 }) => match style {
           CmpStyle::Red => {
             let (n1, args1) = Formula::adjust_pred(*n1, args1, ctx);
             let (n2, args2) = Formula::adjust_pred(*n2, args2, ctx);
@@ -692,25 +697,26 @@ impl Formula {
           }
           _ => n1.cmp(n2).then_with(|| Term::cmp_list(ctx, lc, args1, args2, style)),
         },
-        (ForAll { id: _, dom: dom1, scope: sc1 }, ForAll { id: _, dom: dom2, scope: sc2 }) =>
+        (Formula::ForAll { id: _, dom: dom1, scope: sc1 }, Formula::ForAll { id: _, dom: dom2, scope: sc2 }) =>
           dom1.cmp(ctx, lc, dom2, style).then_with(|| sc1.cmp(ctx, lc, sc2, style)),
         #[allow(clippy::explicit_auto_deref)]
-        (FlexAnd { terms: t1, scope: sc1, .. }, FlexAnd { terms: t2, scope: sc2, .. }) =>
+        (Formula::FlexAnd { terms: t1, scope: sc1, .. }, Formula::FlexAnd { terms: t2, scope: sc2, .. }) =>
           Term::cmp_list(ctx, lc, &**t1, &**t2, style).then_with(|| sc1.cmp(ctx, lc, sc2, style)),
-        (LegacyFlexAnd { orig: args1, .. }, LegacyFlexAnd { orig: args2, .. }) =>
+        (Formula::LegacyFlexAnd { orig: args1, .. }, Formula::LegacyFlexAnd { orig: args2, .. }) =>
           Formula::cmp_list(ctx, lc, &**args1, &**args2, style),
         _ => unreachable!(),
       }
     })
   }
 
-  fn cmp_list(
-    ctx: Option<&Constructors>, lc: Option<&LocalContext>, fs1: &[Formula], fs2: &[Formula],
+  fn cmp_list<'a>(
+    ctx: Option<&Constructors>, lc: Option<&LocalContext>, fs1: &[Formula<'a>], fs2: &[Formula<'a>],
     style: CmpStyle,
   ) -> Ordering {
     // vprintln!("{fs1:?} <?> {fs2:?}");
     cmp_list(fs1, fs2, |f1, f2| f1.cmp(ctx, lc, f2, style))
   }
+
 }
 
 pub struct EqCtx<'a> {
@@ -902,37 +908,33 @@ pub trait Equate {
 
   /// on (): EqFrm
   /// on Subst: EsFrm
-  fn eq_formula(&mut self, ctx: &mut EqCtx<'_>, f1: &Formula, f2: &Formula) -> bool {
-    use Formula::*;
+  fn eq_formula<'b>(&mut self, ctx: &mut EqCtx<'_>, f1: &Formula<'b>, f2: &Formula<'b>) -> bool {
     match (f1.skip_priv_pred(), f2.skip_priv_pred()) {
-      (True, True) => true,
-      (Neg { f: f1 }, Neg { f: f2 }) => self.eq_formula(ctx, f1, f2),
-      (Is { term: t1, ty: ty1 }, Is { term: t2, ty: ty2 }) =>
+      (Formula::True, Formula::True) => true,
+      (Formula::Neg { f: f1 }, Formula::Neg { f: f2 }) => self.eq_formula(ctx, f1, f2),
+      (Formula::Is { term: t1, ty: ty1 }, Formula::Is { term: t2, ty: ty2 }) =>
         self.eq_term(ctx, t1, t2) && self.eq_type(ctx, ty1, ty2),
-      (And { args: args1 }, And { args: args2 }) => self.eq_and(ctx, args1, args2),
-      (SchPred { nr: SchPredId(n1), args: args1 }, SchPred { nr: SchPredId(n2), args: args2 })
+      (Formula::And { args: args1 }, Formula::And { args: args2 }) => self.eq_and(ctx, args1, args2),
+      (Formula::SchPred { nr: SchPredId(n1), args: args1 }, Formula::SchPred { nr: SchPredId(n2), args: args2 })
       | (
-        PrivPred { nr: PrivPredId(n1), args: args1, .. },
-        PrivPred { nr: PrivPredId(n2), args: args2, .. },
+        Formula::PrivPred { nr: PrivPredId(n1), args: args1, .. },
+        Formula::PrivPred { nr: PrivPredId(n2), args: args2, .. },
       ) => n1 == n2 && self.eq_terms(ctx, args1, args2),
-      (Attr { nr: n1, args: args1 }, Attr { nr: n2, args: args2 }) => {
+      (Formula::Attr { nr: n1, args: args1 }, Formula::Attr { nr: n2, args: args2 }) => {
         let (n1, args1) = Formula::adjust_attr(*n1, args1, Some(&ctx.g.constrs));
         let (n2, args2) = Formula::adjust_attr(*n2, args2, Some(&ctx.g.constrs));
         n1 == n2 && self.eq_terms(ctx, args1, args2)
       }
-      (Pred { nr: n1, args: args1 }, Pred { nr: n2, args: args2 }) =>
+      (Formula::Pred { nr: n1, args: args1 }, Formula::Pred { nr: n2, args: args2 }) =>
         self.eq_pred(ctx, *n1, *n2, args1, args2),
-      (ForAll { id: _, dom: dom1, scope: sc1 }, ForAll { id: _, dom: dom2, scope: sc2 }) =>
+      (Formula::ForAll { id: _, dom: dom1, scope: sc1 }, Formula::ForAll { id: _, dom: dom2, scope: sc2 }) =>
         self.eq_forall(ctx, dom1, dom2, sc1, sc2),
-      (FlexAnd { terms: t1, scope: sc1, .. }, FlexAnd { terms: t2, scope: sc2, .. }) =>
+      (Formula::FlexAnd { terms: t1, scope: sc1, .. }, Formula::FlexAnd { terms: t2, scope: sc2, .. }) =>
         self.eq_terms(ctx, &**t1, &**t2) && self.eq_formula(ctx, sc1, sc2),
-      (
-        LegacyFlexAnd { orig: args1, expansion: e1, .. },
-        LegacyFlexAnd { orig: args2, expansion: e2, .. },
-      ) => self.eq_formulas(ctx, &**args1, &**args2) && self.eq_formula(ctx, e1, e2),
+      (Formula::LegacyFlexAnd { orig: args1, .. }, Formula::LegacyFlexAnd { orig: args2, .. }) =>
+        self.eq_formula(ctx, &args1[0], &args2[0]) && self.eq_formula(ctx, &args1[1], &args2[1]),
       _ => false,
     }
-    // vprintln!("eq_formula {f1:?} <> {f2:?} -> {res}");
   }
 
   fn eq_ctx<'a>(&self, g: &'a Global, lc: &'a LocalContext) -> EqCtx<'a> { EqCtx::new(g, lc) }
@@ -1148,7 +1150,7 @@ macro_rules! mk_visit {
 
       fn visit_flex_and(
         &mut self, nat: &$($mutbl)? Type, le: $(&$mutbl)? PredId,
-        [tm_l, tm_r]: &$($mutbl)? [Term; 2], scope: &$($mutbl)? Formula,
+        [tm_l, tm_r]: &$($mutbl)? [Term; 2], scope: &$($mutbl)? Formula<'_>,
       ) {
         self.visit_type(nat);
         self.visit_pred_id(le);
@@ -1159,7 +1161,7 @@ macro_rules! mk_visit {
         self.pop_bound(1)
       }
 
-      fn super_visit_formula(&mut self, f: &$($mutbl)? Formula) {
+      fn super_visit_formula<'a>(&mut self, f: &$($mutbl)? Formula<'a>) {
         if self.abort() { return }
         match f {
           Formula::SchPred { args, .. } => self.visit_terms(args),
@@ -1205,9 +1207,10 @@ macro_rules! mk_visit {
         }
       }
 
-      fn visit_formula(&mut self, f: &$($mutbl)? Formula) {
+      fn visit_formula<'a>(&mut self, f: &$($mutbl)? Formula<'a>) {
         self.super_visit_formula(f)
       }
+
 
       fn visit_push_locus_tys(&mut self, tys: &$($mutbl)? [Type]) {
         for ty in tys {
@@ -1846,17 +1849,19 @@ impl Formula {
         ty = value
       }
       if let Formula::Neg { f } = ty {
-        if let Formula::PrivPred { value, .. } = &**f {
-          let mut l = &**value;
-          while let Formula::PrivPred { value, .. } = l {
+        if let Formula::PrivPred { value, .. } = &*f {
+          let mut l = &*value;
+          while let Formula::PrivPred { value, .. } = &**l {
             l = value
           }
-          if let Formula::Neg { f } = l {
+          if let Formula::Neg { f } = &**l {
             ty = f;
             continue
           }
+
         }
       }
+
       // vprintln!("skip_priv_pred {self:?} -> {ty:?}");
       return ty
     }
@@ -2203,7 +2208,8 @@ impl Definiens {
     let ConstrKind::Func(nr) = self.constr else { return None };
     let Formula::True = self.assumptions else { return None };
     let DefValue::Term(DefBody { cases, otherwise: Some(ow) }) = &self.value else { return None };
-    let [] = **cases else { return None };
+    let [] = &*cases else { return None };
+
     let primary = self.primary.split_last().unwrap().1.to_vec().into(); // TODO: is this an unwrap?
     let expansion = ow.clone();
     let essential = self.essential.split_last().unwrap().1.to_vec().into(); // TODO: is this an unwrap?
@@ -2280,14 +2286,22 @@ impl VisitMut for ExpandPrivFunc<'_> {
           *f = std::mem::take(f3)
         }
       }
-      Formula::And { args } =>
-        for mut f in std::mem::take(args) {
-          self.visit_formula(&mut f);
-          match f {
-            Formula::And { args: fs } => args.extend(fs),
-            _ => args.push(f),
+      Formula::And { args } => {
+        let mut i = 0;
+        while i < args.len() {
+          self.visit_formula(&mut args[i]);
+          if matches!(&args[i], Formula::And { .. }) {
+            let Formula::And { args: inner } = args.remove(i) else { unreachable!() };
+            for f in inner {
+              args.insert(i, f);
+              i += 1;
+            }
+          } else {
+            i += 1;
           }
-        },
+        }
+      }
+
       Formula::PrivPred { value, .. } => {
         *f = std::mem::take(value);
         self.visit_formula(f)
@@ -2794,7 +2808,7 @@ impl LocalContext {
     descope
   }
 
-  pub fn mk_forall(&mut self, range: Range<usize>, istart: u32, pop: bool, f: &mut Formula) {
+  pub fn mk_forall<'a>(&mut self, range: Range<usize>, istart: u32, pop: bool, f: &mut Formula<'a>, bump: &'a bumpalo::Bump) {
     // vprintln!("mk_forall {range:?} (pop = {pop}) <- {f:?}");
     if pop {
       self.fixed_var.0.truncate(range.end);
@@ -2812,8 +2826,9 @@ impl LocalContext {
       if abst.lift != 0 {
         abst.visit_type(&mut ty);
       }
-      *f = Formula::forall(vid, ty, std::mem::take(f));
+      *f = Formula::forall(vid, ty, std::mem::take(f), bump);
     };
+
     if pop {
       self.fixed_var.0.drain(range).rev().for_each(|var| process(var.id, var.ty))
     } else {

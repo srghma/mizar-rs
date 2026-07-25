@@ -85,6 +85,7 @@ struct ConstrMaps {
 pub struct Equalizer<'a> {
   pub g: &'a Global,
   pub lc: &'a mut LocalContext,
+  pub bump: &'a bumpalo::Bump,
   reductions: &'a [Reduction],
   infers: IdxVec<InferId, Option<EqMarkId>>,
   constrs: ConstrMaps,
@@ -93,6 +94,7 @@ pub struct Equalizer<'a> {
   pub next_eq_class: EqClassId,
   clash: bool,
 }
+
 impl WithGlobalLocal for Equalizer<'_> {
   fn global(&self) -> &Global { self.g }
   fn local(&self) -> &LocalContext { self.lc }
@@ -825,7 +827,9 @@ impl<'a> Equalizer<'a> {
     Self {
       g: ck.g,
       lc: ck.lc,
+      bump: ck.bump,
       reductions: ck.reductions,
+
       infers: Default::default(),
       constrs: Default::default(),
       terms: Default::default(),
@@ -853,7 +857,8 @@ impl<'a> Equalizer<'a> {
         if pred.properties.get(prop) && neg.find(self.g, self.lc, f).is_none() {
           let mut args = args.clone();
           args.swap(pred.properties.arg1 as usize, pred.properties.arg2 as usize);
-          neg.insert(self.g, self.lc, Cow::Owned(Formula::Pred { nr: *nr, args }));
+          neg.insert(self.g, self.lc, Formula::Pred { nr: *nr, args });
+
         }
       }
     }
@@ -1743,12 +1748,14 @@ impl<'a> Equalizer<'a> {
                 let m2 = self.y(|y| arg2.visit_cloned(y))?.mark().unwrap();
                 eqs.insert(self.lc.marks[m1].1, self.lc.marks[m2].1);
               } else {
-                bas[pos].0.push(self.y(|y| f.visit_cloned(y))?);
+                bas[pos].0.push(self.y(|y| { let mut f = f.clone_in(self.bump); f.visit(y); Ok(f) })??);
               }
             }
             _ => {
-              bas[pos].0.push(self.y(|y| f.visit_cloned(y))?);
+              bas[pos].0.push(self.y(|y| { let mut f = f.clone_in(self.bump); f.visit(y); Ok(f) })??);
             }
+
+
           }
         }
       }

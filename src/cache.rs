@@ -175,18 +175,18 @@ impl MizPath {
     )
   }
 
-  pub fn read_def(
-    &self, new_prel: bool, sig: &mut Vec<Article>, defs: &mut Vec<Definiens>,
+  pub fn read_def<'a>(
+    &self, new_prel: bool, sig: &mut Vec<Article>, defs: &mut Vec<Definiens<'a>>, bump: &'a bumpalo::Bump,
   ) -> PathResult<()> {
     self.get_cache(
       new_prel,
       &mut (sig, defs),
       |c| &c.def,
-      |(sig, defs), _| self.read_definitions(MaybeMut::None, new_prel, "def", Some(sig), defs),
-      |(sig, defs), _| (std::mem::take(sig), std::mem::take(defs)),
+      |(sig, defs), _| self.read_definitions(MaybeMut::None, new_prel, "def", Some(sig), defs, bump),
+      |(sig, defs), _| (std::mem::take(*sig), std::mem::take(*defs)),
       |(sig, defs), (sig2, defs2)| {
         sig.clone_from(sig2);
-        defs.clone_from(defs2);
+        defs.extend(defs2.iter().map(|d| d.clone_in(bump)));
         if defs2.is_empty() {
           Err((self.to_path(false, new_prel, "def"), ParseError::MissingFile))
         } else {
@@ -196,15 +196,15 @@ impl MizPath {
     )
   }
 
-  pub fn read_dpr(
-    &self, new_prel: bool, sig: &mut Vec<Article>, dpr: &mut Vec<Property>,
+  pub fn read_dpr<'a>(
+    &self, new_prel: bool, sig: &mut Vec<Article>, dpr: &mut Vec<Property>, bump: &'a bumpalo::Bump,
   ) -> PathResult<()> {
     self.get_cache(
       new_prel,
       &mut (sig, dpr),
       |c| &c.dpr,
-      |(sig, dpr), _| self.read_properties(MaybeMut::None, new_prel, "dpr", Some(sig), dpr),
-      |(sig, dpr), _| (std::mem::take(sig), std::mem::take(dpr)),
+      |(sig, dpr), _| self.read_properties(MaybeMut::None, new_prel, "dpr", Some(sig), dpr, bump),
+      |(sig, dpr), _| (std::mem::take(*sig), std::mem::take(*dpr)),
       |(sig, dpr), (sig2, dpr2)| {
         sig.clone_from(sig2);
         dpr.clone_from(dpr2);
@@ -217,15 +217,15 @@ impl MizPath {
     )
   }
 
-  pub fn read_did(
-    &self, new_prel: bool, sig: &mut Vec<Article>, did: &mut Vec<IdentifyFunc>,
+  pub fn read_did<'a>(
+    &self, new_prel: bool, sig: &mut Vec<Article>, did: &mut Vec<IdentifyFunc>, bump: &'a bumpalo::Bump,
   ) -> PathResult<()> {
     self.get_cache(
       new_prel,
       &mut (sig, did),
       |c| &c.did,
-      |(sig, did), _| self.read_identify_regs(MaybeMut::None, new_prel, "did", Some(sig), did),
-      |(sig, did), _| (std::mem::take(sig), std::mem::take(did)),
+      |(sig, did), _| self.read_identify_regs(MaybeMut::None, new_prel, "did", Some(sig), did, bump),
+      |(sig, did), _| (std::mem::take(*sig), std::mem::take(*did)),
       |(sig, did), (sig2, did2)| {
         sig.clone_from(sig2);
         did.clone_from(did2);
@@ -238,15 +238,15 @@ impl MizPath {
     )
   }
 
-  pub fn read_drd(
-    &self, new_prel: bool, sig: &mut Vec<Article>, drd: &mut Vec<Reduction>,
+  pub fn read_drd<'a>(
+    &self, new_prel: bool, sig: &mut Vec<Article>, drd: &mut Vec<Reduction>, bump: &'a bumpalo::Bump,
   ) -> PathResult<()> {
     self.get_cache(
       new_prel,
       &mut (sig, drd),
       |c| &c.drd,
-      |(sig, drd), _| self.read_reduction_regs(MaybeMut::None, new_prel, "drd", Some(sig), drd),
-      |(sig, drd), _| (std::mem::take(sig), std::mem::take(drd)),
+      |(sig, drd), _| self.read_reduction_regs(MaybeMut::None, new_prel, "drd", Some(sig), drd, bump),
+      |(sig, drd), _| (std::mem::take(*sig), std::mem::take(*drd)),
       |(sig, drd), (sig2, drd2)| {
         sig.clone_from(sig2);
         drd.clone_from(drd2);
@@ -258,6 +258,7 @@ impl MizPath {
       },
     )
   }
+
 
   pub fn read_the(&self, new_prel: bool, the: &mut DepTheorems) -> PathResult<()> {
     self.get_cache_basic(

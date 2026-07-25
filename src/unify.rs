@@ -39,10 +39,12 @@ impl std::fmt::Debug for EqTerm {
 pub struct Unifier<'a> {
   g: &'a Global,
   lc: &'a mut LocalContext,
+  pub bump: &'a bumpalo::Bump,
   infer: HashMap<InferId, EqClassId>,
   eq_class: IdxVec<EqClassId, EqTerm>,
-  bas: &'a EnumMap<bool, Atoms>,
+  bas: &'a EnumMap<bool, Atoms<'a>>,
 }
+
 
 #[derive(Copy, Clone, Debug, Enum)]
 enum ComplexTermKind {
@@ -73,14 +75,17 @@ impl Term {
 
 impl<'a> Unifier<'a> {
   /// InitUnifier
-  pub fn new(eq: Equalizer<'a>, bas: &'a EnumMap<bool, Atoms>) -> Self {
+  pub fn new(eq: Equalizer<'a>, bas: &'a EnumMap<bool, Atoms<'a>>) -> Self {
+    let bump = eq.bump;
     let mut u = Self {
       g: eq.g,
       lc: eq.lc,
+      bump,
       infer: Default::default(),
       eq_class: IdxVec::from_default(eq.next_eq_class.into_usize()),
       bas,
     };
+
     for etm in eq.terms.0 {
       let ec = &mut u.eq_class[etm.id];
       if !etm.eq_class.is_empty() {
@@ -118,14 +123,16 @@ impl<'a> Unifier<'a> {
 
   /// Verify: Attempts to prove f |- false
   fn falsify(&mut self, mut f: Formula) -> Result<OrUnsat<()>, Overflow> {
-    Standardize { g: self.g, lc: self.lc }.visit_formula(&mut f);
+    Standardize { g: self.g, lc: self.lc, bump: self.bump }.visit_formula(&mut f);
+
     if self.g.cfg.unify_header {
       eprintln!("falsify: {f:?}");
     }
     let mut fvars = IdxVec::default();
     // Suppose f = ∀ xs, F(xs).
     // First, introduce metavariables ("free vars") to obtain a formula F(?v)
-    OpenAsFreeVar(&mut fvars).open_quantifiers(&mut f, false);
+    OpenAsFreeVar(&mut fvars).open_quantifiers(&mut f, false, self.bump);
+
     if self.g.cfg.unify_header {
       for (i, ty) in fvars.enum_iter() {
         vprintln!("v{i:?}: {ty:?}")
@@ -195,8 +202,12 @@ impl<'a> Unifier<'a> {
     // so it suffices to show ∃ ?v_1 ... ?v_n. |- !F_1(?v_1) \/ ... \/ !F_n(?v_n)
     for f in fs {
       all_clauses.mk_or_else(|| {
-        let mut f = f.visit_cloned(&mut Standardize { g: self.g, lc: self.lc });
-        OpenAsFreeVar(&mut fvars).open_quantifiers(&mut f, false);
+        let mut f = f.clone_in(self.bump);
+        Standardize { g: self.g, lc: self.lc, bump: self.bump }.standardize_formula(&mut f, true);
+
+
+        OpenAsFreeVar(&mut fvars).open_quantifiers(&mut f, false, self.bump);
+
         atoms.normalize(self.g, self.lc, f, false)
       })?;
     }
@@ -280,7 +291,8 @@ impl<'a> Unifier<'a> {
       Ok(())
     };
     for &f in &univ {
-      match self.falsify(f.clone()) {
+      match self.falsify(f.clone_in(self.bump)) {
+
         Ok(or_unsat) => or_unsat?,
         Err(o) => {
           set_overflow(o)?;
@@ -307,12 +319,13 @@ impl<'a> Unifier<'a> {
               for &m in &self.eq_class[ec].terms[CTK::Fraenkel] {
                 if let Term::Fraenkel { args: tys, scope, compr } = &self.lc.marks[m].0 {
                   let (tys, scope, compr) = (tys.clone(), (**scope).clone(), (**compr).clone());
-                  let mut fm = args[0].clone().not_in_fraenkel(tys, scope, compr, &self.g.reqs);
-                  fm.distribute_quantifiers(&self.g.constrs, self.lc, 0);
-                  fraenkel_fmlas.push(fm.maybe_neg(!pos))
+                  let mut fm = args[0].clone().not_in_fraenkel(tys, scope, compr, &self.g.reqs, self.bump);
+                  fm.distribute_quantifiers(&self.g.constrs, self.lc, 0, self.bump);
+                  fraenkel_fmlas.push(fm.maybe_neg(!pos, self.bump))
                 }
               }
             }
+
             for f in fraenkel_fmlas.drain(..) {
               self.falsify(f).unwrap_or_else(&mut set_overflow)?;
             }
@@ -339,25 +352,30 @@ impl Term {
   /// Given a fraenkel term `{ F(xs) where xs : P(xs) }` and a main term `self`,
   /// constructs the formula equivalent to `¬(self ∈ { F(xs) where xs : P(xs) })`,
   /// that is: `¬ ∃ xs, self = F(xs) /\ P(xs)`
-  fn not_in_fraenkel(
-    self, args: Box<[(IdentId, Type)]>, scope: Term, compr: Formula, reqs: &RequirementIndexes,
-  ) -> Formula {
-    let mut conjs = vec![reqs.mk_eq(self, scope)];
-    compr.append_conjuncts_to(&mut conjs);
-    let mut f = Formula::Neg { f: Box::new(Formula::And { args: conjs }) };
+  fn not_in_fraenkel<'a>(
+    self, args: Box<[(IdentId, Type)]>, scope: Term, compr: Formula<'a>, reqs: &RequirementIndexes,
+    bump: &'a bumpalo::Bump,
+  ) -> Formula<'a> {
+    let mut conjs = bumpalo::collections::Vec::new_in(bump);
+    conjs.push(reqs.mk_eq(self, scope));
+    compr.append_conjuncts_to(bump, &mut conjs);
+    let mut f = Formula::Neg { f: bumpalo::boxed::Box::new_in(Formula::And { args: conjs }, bump) };
     for (id, ty) in args.into_vec().into_iter().rev() {
-      f = Formula::forall(id, ty, f)
+      f = Formula::forall(id, ty, f, bump)
     }
     f
   }
+
 }
 
 struct Standardize<'a> {
   g: &'a Global,
   lc: &'a mut LocalContext,
+  bump: &'a bumpalo::Bump,
 }
 
 impl VisitMut for Standardize<'_> {
+
   fn visit_term(&mut self, _: &mut Term) {}
   fn visit_terms(&mut self, _: &mut [Term]) {}
 
@@ -369,19 +387,24 @@ impl VisitMut for Standardize<'_> {
     self.visit_terms(&mut ty.args);
   }
 
-  fn visit_formula(&mut self, f: &mut Formula) { self.standardize_formula(f, true) }
+  fn visit_formula<'b>(&mut self, f: &mut Formula<'b>) {
+    let f: &mut Formula<'a> = unsafe { std::mem::transmute(f) };
+    self.standardize_formula(f, true)
+  }
 }
 
-impl Standardize<'_> {
+impl<'a> Standardize<'a> {
   /// * pos = true: PositivelyStandardized
   /// * pos = false: NegativelyStandardized
-  fn standardize_formula(&mut self, f: &mut Formula, pos: bool) {
+  fn standardize_formula(&mut self, f: &mut Formula<'a>, pos: bool) {
+
+
     loop {
       match f {
         Formula::Neg { f: f2 } => {
           self.standardize_formula(f2, !pos);
           if let Formula::Neg { f: f3 } = &mut **f2 {
-            *f = std::mem::take(f3)
+            *f = std::mem::take(&mut **f3)
           }
         }
         Formula::And { args } => args.iter_mut().for_each(|f| self.standardize_formula(f, pos)),
@@ -398,10 +421,11 @@ impl Standardize<'_> {
           self.visit_term(main);
           if !matches!(main.unmark(self.lc), Term::EqClass(_)) {
             let attr = Attr { nr: *nr, pos: true, args: rest.to_owned().into() };
-            *f = Box::new(std::mem::take(main)).mk_is(self.g, self.lc, attr);
+            *f = Box::new(std::mem::take(main)).mk_is(self.g, self.lc, attr, self.bump);
             continue
           }
         }
+
         Formula::PrivPred { args, value, .. } => {
           self.visit_terms(args);
           ExpandPrivFunc(&self.g.constrs, self.lc).visit_formula(value);
@@ -419,11 +443,11 @@ impl Standardize<'_> {
 
 impl Term {
   /// ChReconQualFrm
-  fn mk_is(self: Box<Term>, g: &Global, lc: &LocalContext, attr: Attr) -> Formula {
+  fn mk_is<'b>(self: Box<Term>, g: &Global, lc: &LocalContext, attr: Attr, bump: &'b bumpalo::Bump) -> Formula<'b> {
     let mut ty = self.get_type_uncached(g, lc);
     ty.attrs.0.insert(Some(&g.constrs), lc, attr);
     if matches!(ty.attrs.0, Attrs::Inconsistent) {
-      Formula::Neg { f: Box::new(Formula::True) }
+      Formula::Neg { f: bumpalo::boxed::Box::new_in(Formula::True, bump) }
     } else {
       ty.attrs.1 = ty.attrs.0.clone();
       Formula::Is { term: self, ty: Box::new(ty) }
@@ -431,9 +455,11 @@ impl Term {
   }
 }
 
+
 struct Unify<'a> {
   g: &'a Global,
   lc: &'a LocalContext,
+  bump: &'a bumpalo::Bump,
   infer: &'a HashMap<InferId, EqClassId>,
   eq_class: &'a IdxVec<EqClassId, EqTerm>,
   fvars: &'a IdxVec<FVarId, Type>,
@@ -446,11 +472,12 @@ impl WithGlobalLocal for Unify<'_> {
   fn local(&self) -> &LocalContext { self.lc }
 }
 
-impl Unifier<'_> {
-  fn unify<'a>(&'a mut self, fvars: &'a IdxVec<FVarId, Type>) -> Unify<'a> {
+impl<'a> Unifier<'a> {
+  fn unify<'b>(&'b mut self, fvars: &'b IdxVec<FVarId, Type>) -> Unify<'b> {
     Unify {
       g: self.g,
       lc: self.lc,
+      bump: self.bump,
       infer: &self.infer,
       eq_class: &self.eq_class,
       fvars,
@@ -460,6 +487,7 @@ impl Unifier<'_> {
     }
   }
 }
+
 
 impl Unify<'_> {
   /// Constructs an instantiation P(?v) such that
@@ -987,9 +1015,10 @@ impl Unify<'_> {
   }
 
   /// InstCollection.UNIFrm
-  fn unify_formula(
-    &mut self, f1: &Formula, f2: &Formula,
+  fn unify_formula<'b>(
+    &mut self, f1: &Formula<'b>, f2: &Formula<'b>,
   ) -> Result<Dnf<FVarId, EqClassId>, Overflow> {
+
     // vprintln!("unify_formula {f1:?} <> {f2:?}");
     let res = match (f1, f2) {
       (Formula::True, Formula::True) => Dnf::True,

@@ -6,38 +6,38 @@ pub(super) struct ArticleParser<'a> {
 }
 
 #[derive(Debug)]
-enum ArticleElem {
-  Item(Item),
-  AuxiliaryItem(AuxiliaryItem),
+enum ArticleElem<'a> {
+  Item(Item<'a>),
+  AuxiliaryItem(AuxiliaryItem<'a>),
   Let(Vec<(IdentId, Type)>),
-  Assume(Vec<Proposition>),
-  Given(GivenItem),
+  Assume(Vec<Proposition<'a>>),
+  Given(GivenItem<'a>),
   Take(Term),
   TakeAsVar(IdentId, Type, Term),
-  Definition(Definition),
-  DefStruct(DefStruct),
+  Definition(Definition<'a>),
+  DefStruct(DefStruct<'a>),
   Canceled(CancelKind),
-  Thus(Statement),
-  PerCases(PerCases),
-  PerCasesJustification(Proposition, Justification),
-  Registration(Registration),
-  SimpleCorrCond(SimpleCorrCond),
-  CorrCond(CorrCond),
-  Correctness(Correctness),
-  JustifiedProperty(JustifiedProperty),
+  Thus(Statement<'a>),
+  PerCases(PerCases<'a>),
+  PerCasesJustification(Proposition<'a>, Justification<'a>),
+  Registration(Registration<'a>),
+  SimpleCorrCond(SimpleCorrCond<'a>),
+  CorrCond(CorrCond<'a>),
+  Correctness(Correctness<'a>),
+  JustifiedProperty(JustifiedProperty<'a>),
   Constructor(ConstructorDef),
   Pattern(Pattern),
-  BlockThesis(Formula),
-  Proposition(Proposition),
-  CaseBlock(CaseBlock),
-  Case(CaseKind),
+  BlockThesis(Formula<'a>),
+  Proposition(Proposition<'a>),
+  CaseBlock(CaseBlock<'a>),
+  Case(CaseKind<'a>),
   EndPosition(Position),
   Other,
   End,
 }
 
-impl From<ArticleElem> for Item {
-  fn from(value: ArticleElem) -> Self {
+impl<'a> From<ArticleElem<'a>> for Item<'a> {
+  fn from(value: ArticleElem<'a>) -> Self {
     match value {
       ArticleElem::Item(it) => it,
       ArticleElem::AuxiliaryItem(it) => Item::Auxiliary(it),
@@ -70,8 +70,9 @@ impl From<ArticleElem> for Item {
   }
 }
 
-impl ArticleParser<'_> {
-  pub fn parse_item(&mut self) -> Result<Option<Item>> {
+impl<'a> ArticleParser<'a> {
+
+  pub fn parse_item(&mut self) -> Result<Option<Item<'a>>> {
     let idx = self.r.position();
     Ok(match self.parse_elem()? {
       e @ (ArticleElem::Item(_) | ArticleElem::AuxiliaryItem(_) | ArticleElem::Canceled(_)) =>
@@ -85,19 +86,19 @@ impl ArticleParser<'_> {
     })
   }
 
-  fn finish_proposition(&mut self, prop: Proposition) -> Result<Item> {
+  fn finish_proposition(&mut self, prop: Proposition<'a>) -> Result<Item<'a>> {
     let s = Statement::Proposition { prop, just: self.parse_justification()? };
     Ok(Item::Auxiliary(AuxiliaryItem::Statement(s)))
   }
 
-  fn parse_block_thesis(&mut self) -> Result<Option<Formula>> {
+  fn parse_block_thesis(&mut self) -> Result<Option<Formula<'a>>> {
     Ok(match self.parse_elem()? {
       ArticleElem::BlockThesis(f) => Some(f),
       _ => None,
     })
   }
 
-  fn parse_thesis(&mut self) -> Result<Thesis> {
+  fn parse_thesis(&mut self) -> Result<Thesis<'a>> {
     let idx = self.r.position();
     let Elem::Thesis(f) = self.r.parse_elem(&mut self.buf)? else {
       return Err(ParseError::unexpected_elem(idx, "thesis", None))
@@ -106,7 +107,7 @@ impl ArticleParser<'_> {
   }
 
   #[allow(clippy::type_complexity)]
-  fn parse_reasoning(&mut self, diffuse: bool) -> Result<(Vec<(Item, Option<Thesis>)>, Position)> {
+  fn parse_reasoning(&mut self, diffuse: bool) -> Result<(Vec<(Item<'a>, Option<Thesis<'a>>)>, Position)> {
     let mut items = vec![];
     let end = loop {
       let e = self.parse_elem()?;
@@ -159,7 +160,7 @@ impl ArticleParser<'_> {
     Ok(refs)
   }
 
-  fn parse_justification(&mut self) -> Result<Justification> {
+  fn parse_justification(&mut self) -> Result<Justification<'a>> {
     let e = self.r.read_start(&mut self.buf, None)?;
     Ok(match e.local_name().as_ref() {
       b"By" => {
@@ -216,7 +217,7 @@ impl ArticleParser<'_> {
     Ok(pos)
   }
 
-  fn parse_corr_cond(&mut self, kind: CorrCondKind) -> Result<ArticleElem> {
+  fn parse_corr_cond(&mut self, kind: CorrCondKind) -> Result<ArticleElem<'a>> {
     Ok(match self.r.parse_elem(&mut self.buf)? {
       Elem::Formula(f) => {
         self.r.end_tag(&mut self.buf)?;
@@ -231,7 +232,7 @@ impl ArticleParser<'_> {
     })
   }
 
-  fn parse_cond_and_correctness(&mut self) -> Result<(Vec<CorrCond>, Option<Correctness>)> {
+  fn parse_cond_and_correctness(&mut self) -> Result<(Vec<CorrCond<'a>>, Option<Correctness<'a>>)> {
     let mut conds = vec![];
     Ok(loop {
       match self.parse_elem()? {
@@ -246,7 +247,7 @@ impl ArticleParser<'_> {
     })
   }
 
-  fn parse_case_block(&mut self, (start, label): (Position, Option<LabelId>)) -> Result<CaseBlock> {
+  fn parse_case_block(&mut self, (start, label): (Position, Option<LabelId>)) -> Result<CaseBlock<'a>> {
     assert!(label.is_none());
     let mut block_thesis = None;
     let cs = loop {
@@ -269,7 +270,8 @@ impl ArticleParser<'_> {
     Ok(CaseBlock { pos: (start, end), block_thesis, cs, items, thesis })
   }
 
-  fn parse_elem(&mut self) -> Result<ArticleElem> {
+  fn parse_elem(&mut self) -> Result<ArticleElem<'a>> {
+
     Ok(if let Event::Start(e) = self.r.read_event(&mut self.buf)? {
       match e.local_name().as_ref() {
         b"DefinitionBlock" => {

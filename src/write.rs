@@ -959,16 +959,23 @@ impl MizWriter {
           w.depth -= 1;
         })
       }
-      Formula::FlexAnd { nat, le, terms, scope } => self.write_formula(
-        lc,
-        &Global::into_legacy_flex_and(
-          &mut nat.clone(),
-          *le,
-          &mut terms.clone(),
-          &mut scope.clone(),
-          self.depth,
-        ),
-      ),
+      Formula::FlexAnd { nat, le, terms, scope } => {
+        let bump = bumpalo::Bump::new();
+        self.write_formula(
+          lc,
+          &Global::into_legacy_flex_and(
+            &mut nat.clone(),
+            *le,
+            &mut terms.clone(),
+            scope,
+
+
+            self.depth,
+            &bump,
+          ),
+        )
+      }
+
       Formula::LegacyFlexAnd { orig, terms, expansion } => self.with0("FlexFrm", |w| {
         w.write_formulas(lc, &**orig);
         w.write_terms(lc, &**terms);
@@ -1613,22 +1620,21 @@ impl WriteXml {
   }
   #[allow(clippy::type_complexity)]
   pub fn end_consider<'a>(
-    &mut self, lc: &mut LocalContext, start: usize,
-    mut assums: impl FnMut(
-      &mut LocalContext,
-    ) -> Option<(Position, Option<(LabelId, IdentId)>, &'a Formula)>,
+    &mut self, lc: &LocalContext, start: usize,
+    mut assums: impl FnMut() -> Option<(Position, Option<(LabelId, IdentId)>, &'a Formula<'a>)>,
   ) {
     let State::Prop2(PropKind::Consider(kind)) = self.state else { unreachable!() };
     for fv in &lc.fixed_var.0[start..] {
       self.write_type(lc, fv.id, &fv.ty)
     }
     self.state = State::InnerAssume;
-    while let Some((pos, label, f)) = assums(lc) {
+    while let Some((pos, label, f)) = assums() {
       self.write_proposition(lc, pos, label, f)
     }
     self.state = State::Block(kind);
     self.end_tag("Consider")
   }
+
 
   pub fn start_reconsider(&mut self) {
     let State::Block(kind) = self.state else { unreachable!() };

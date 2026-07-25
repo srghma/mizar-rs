@@ -30,15 +30,16 @@ struct ResGroup {
 }
 
 pub struct Analyzer<'a> {
-  pub r: &'a mut Reader,
+  pub r: &'a mut Reader<'a>,
   pub path: &'a MizPath,
+  pub bump: &'a bumpalo::Bump,
   sch_func_args: IdxVec<SchFuncId, Box<[Type]>>,
   priv_func_args: IdxVec<PrivPredId, Box<[Type]>>,
-  priv_pred: IdxVec<PrivPredId, (Box<[Type]>, Box<Formula>)>,
+  priv_pred: IdxVec<PrivPredId, (Box<[Type]>, Formula<'a>)>,
   sch_pred_args: IdxVec<SchPredId, Box<[Type]>>,
   sch_names: (HashMap<Rc<str>, SchId>, SchId),
-  thesis: Option<Box<Formula>>,
-  thesis_stack: Vec<Option<Box<Formula>>>,
+  thesis: Option<Formula<'a>>,
+  thesis_stack: Vec<Option<Formula<'a>>>,
   label_names: IdxVec<LabelId, Option<Rc<str>>>,
   lookup: Rc<NameLookup>,
   reserved: IdxVec<ReservedId, (IdentId, ResGroupId)>,
@@ -58,8 +59,9 @@ pub struct Analyzer<'a> {
   write_mpt: OWriteMptJson,
   pub export: Exporter,
 }
+
 impl<'a> std::ops::Deref for Analyzer<'a> {
-  type Target = &'a mut Reader;
+  type Target = &'a mut Reader<'a>;
   fn deref(&self) -> &Self::Target { &self.r }
 }
 impl<'a> std::ops::DerefMut for Analyzer<'a> {
@@ -78,7 +80,7 @@ macro_rules! try_p {
     }
   };
 }
-impl Reader {
+impl<'a> Reader<'a> {
   fn push_parse_item(
     &mut self, parser: &mut Result<&mut Parser<'_>, MsmParser>, buf: &mut Vec<ast::Item>,
   ) -> PathResult<bool> {
@@ -116,9 +118,12 @@ impl Reader {
     }
     let write_xml = path.write_xml(self.g.cfg.xml_internals && self.g.cfg.analyzer_full);
     let write_mpt = path.write_mpt_json(self.g.cfg.mpt_json);
+    let bump = bumpalo::Bump::new();
     let mut elab = Analyzer {
       r: self,
       path,
+      bump: &bump,
+
       sch_func_args: Default::default(),
       priv_func_args: Default::default(),
       priv_pred: Default::default(),
@@ -224,7 +229,7 @@ struct Scope {
   reserved: im::HashMap<ReservedId, VarKind>,
 }
 
-impl Analyzer<'_> {
+impl<'a> Analyzer<'a> {
   fn intern_id(&mut self, s: &Rc<str>) -> IdentId { self.lc.formatter.intern_id(s) }
 
   fn open_scope(&mut self, push_label: bool, copy_thesis: bool) -> Scope {
@@ -633,22 +638,25 @@ impl Analyzer<'_> {
               to_push.push((prop.f.pos(), label, f))
             }
           })
-          .mk_neg();
+          .mk_neg(self.bump);
           let end = self.lc.fixed_var.len();
-          self.lc.mk_forall(start..end, istart, false, &mut f);
-          f = f.mk_neg();
+          self.lc.mk_forall(start..end, istart, false, &mut f, self.bump);
+          f = f.mk_neg(self.bump);
+
           self.write_xml.on(|w| w.start_consider(&self.r.lc, it.pos, None, &f));
           f.visit(&mut self.intern_const());
           self.elab_justification(None, &f, just);
           self.write_xml.on(|w| {
             let mut label_start = self.label_names.peek();
             let mut iter = to_push.iter();
-            w.end_consider(&mut self.r.lc, start, |lc| {
+            let lc = &self.r.lc;
+            w.end_consider(lc, start, || {
               let (pos, ref label, ref f) = iter.next()?;
               let label =
                 label.as_ref().map(|(_, id)| (label_start.fresh(), lc.formatter.intern_id(id)));
               Some((*pos, label, f))
             });
+
           });
           for (_, label, mut f) in to_push {
             f.visit(&mut self.intern_const());
@@ -1900,10 +1908,11 @@ impl Analyzer<'_> {
     ty
   }
 
-  fn elab_intern_formula_forall_reserved(&mut self, f: &mut ast::Formula, pos: bool) -> Formula {
-    let mut f = self.elab_formula_forall_reserved(f, pos).0;
-    f.visit(&mut self.r.intern_const());
-    f
+  fn elab_intern_formula_forall_reserved(&mut self, f: &mut ast::Formula, pos: bool) -> Formula<'a> {
+    let mut res = self.elab_formula_forall_reserved(f, pos).0;
+    let mut ic = self.r.intern_const();
+    res.visit(&mut ic);
+    res
   }
 
   fn try_unfold(
@@ -2190,34 +2199,34 @@ impl Analyzer<'_> {
   }
 }
 
-struct TypeMismatch {
-  got: Formula,
-  want: Formula,
+struct TypeMismatch<'a> {
+  got: Formula<'a>,
+  want: Formula<'a>,
 }
-impl std::fmt::Debug for TypeMismatch {
+impl<'a> std::fmt::Debug for TypeMismatch<'a> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     write!(f, "type mismatch: got {:?}, expected {:?}", self.got, self.want)
   }
 }
 
-struct UnfoldConjIter {
-  stack: Vec<std::vec::IntoIter<Formula>>,
-  iter: std::vec::IntoIter<Formula>,
+struct UnfoldConjIter<'a> {
+  stack: Vec<std::vec::IntoIter<Formula<'a>>>,
+  iter: std::vec::IntoIter<Formula<'a>>,
 }
-impl UnfoldConjIter {
-  fn new(conjs: Vec<Formula>) -> UnfoldConjIter {
+impl<'a> UnfoldConjIter<'a> {
+  fn new(conjs: Vec<Formula<'a>>) -> UnfoldConjIter<'a> {
     UnfoldConjIter { stack: vec![], iter: conjs.into_iter() }
   }
-  fn push_front(&mut self, front: std::vec::IntoIter<Formula>) {
+  fn push_front(&mut self, front: std::vec::IntoIter<Formula<'a>>) {
     self.stack.push(std::mem::replace(&mut self.iter, front))
   }
-  fn into_vec(self) -> Vec<Formula> {
+  fn into_vec(self) -> Vec<Formula<'a>> {
     self.iter.chain(self.stack.into_iter().rev().flatten()).collect()
   }
   fn is_empty(&self) -> bool { self.iter.as_slice().is_empty() && self.stack.is_empty() }
 }
-impl Iterator for UnfoldConjIter {
-  type Item = Formula;
+impl<'a> Iterator for UnfoldConjIter<'a> {
+  type Item = Formula<'a>;
   fn next(&mut self) -> Option<Self::Item> {
     loop {
       if let Some(f) = self.iter.next() {
@@ -2302,7 +2311,7 @@ impl<const N: usize> VisitMut for InstN<N> {
 enum PropertyDeclKind<'a> {
   Func(Option<(FuncId, &'a [ConstId])>, Args),
   Pred(Args, bool),
-  Mode(&'a DefBody<Formula>),
+  Mode(&'a DefBody<Formula<'a>>),
   None,
 }
 
@@ -2311,7 +2320,7 @@ struct PropertiesBuilder<'a> {
   visible: &'a [LocusId],
   kind: PropertyDeclKind<'a>,
   props: Properties,
-  formula: Option<Box<Formula>>,
+  formula: Option<Box<Formula<'a>>>,
 }
 
 impl<'a> PropertiesBuilder<'a> {
@@ -2551,7 +2560,7 @@ struct CollectReserved<'a> {
   level: u32,
 }
 
-impl Analyzer<'_> {
+impl<'a> Analyzer<'a> {
   fn collect_reserved(&mut self, f: impl FnOnce(&mut CollectReserved<'_>)) -> Vec<ReservedId> {
     if !self.g.cfg.nameck_enabled {
       return vec![]
@@ -2927,10 +2936,11 @@ trait ReadProof {
             f.append_conjuncts_to(conjs)
           })
         });
-        f = f.mk_neg();
+        f = f.mk_neg(elab.bump);
         let end = elab.lc.fixed_var.len();
-        elab.lc.mk_forall(n..end, istart, false, &mut f);
-        f = f.mk_neg();
+        elab.lc.mk_forall(n..end, istart, false, &mut f, elab.bump);
+        f = f.mk_neg(elab.bump);
+
         elab.write_xml.on(|w| w.given(&elab.r.lc, it.pos, n, &conds2, &f));
         self.assume(elab, vec![f], true);
       }
@@ -3057,11 +3067,12 @@ impl CorrConds {
 
 struct AbstractIt(u32, u32);
 impl AbstractIt {
-  fn forall0(it_type: &Type, mut f: Formula, pos: bool) -> Formula {
+  fn forall0<'a>(it_type: &Type, mut f: Formula<'a>, pos: bool, bump: &'a bumpalo::Bump) -> Formula<'a> {
     AbstractIt(0, 1).visit_formula(&mut f);
-    Formula::forall0(it_type.clone(), f.maybe_neg(pos))
+    Formula::forall0(it_type.clone(), f.maybe_neg(pos, bump), bump)
   }
 }
+
 
 impl VisitMut for AbstractIt {
   fn visit_term(&mut self, tm: &mut Term) {
@@ -3086,153 +3097,158 @@ impl VisitMut for AbstractLocus {
   }
 }
 
-pub trait BodyKind {
-  fn it_eq(&self, g: &Global) -> Formula;
-  fn mk_eq(&self, g: &Global, other: &Self) -> Formula;
+pub trait BodyKind<'a> {
+  fn it_eq(&self, g: &Global, bump: &'a bumpalo::Bump) -> Formula<'a>;
+  fn mk_eq(&self, g: &Global, other: &Self, bump: &'a bumpalo::Bump) -> Formula<'a>;
 }
-impl BodyKind for Term {
-  fn it_eq(&self, g: &Global) -> Formula { g.reqs.mk_eq(Term::It, self.clone()) }
-  fn mk_eq(&self, g: &Global, other: &Self) -> Formula { g.reqs.mk_eq(self.clone(), other.clone()) }
+impl<'a> BodyKind<'a> for Term {
+  fn it_eq(&self, g: &Global, _bump: &'a bumpalo::Bump) -> Formula<'a> { g.reqs.mk_eq(Term::It, self.clone()) }
+  fn mk_eq(&self, g: &Global, other: &Self, _bump: &'a bumpalo::Bump) -> Formula<'a> { g.reqs.mk_eq(self.clone(), other.clone()) }
 }
-impl BodyKind for Formula {
-  fn it_eq(&self, _: &Global) -> Formula { self.clone() }
-  fn mk_eq(&self, _: &Global, other: &Self) -> Formula { self.clone().mk_iff(other.clone()) }
+impl<'a> BodyKind<'a> for Formula<'a> {
+  fn it_eq(&self, _: &Global, bump: &'a bumpalo::Bump) -> Formula<'a> { self.clone_in(bump) }
+  fn mk_eq(&self, _: &Global, other: &Self, bump: &'a bumpalo::Bump) -> Formula<'a> { self.clone_in(bump).mk_iff(other.clone_in(bump), bump) }
 }
 
-impl<T: BodyKind> DefBody<T> {
-  fn mk_consistency(&self, g: &Global, it_type: Option<&Type>) -> Option<Box<Formula>> {
+
+impl<'a, T: BodyKind<'a>> DefBody<T> {
+  fn mk_consistency(&self, g: &Global, it_type: Option<&Type>, bump: &'a bumpalo::Bump) -> Option<Formula<'a>> {
     if self.cases.is_empty() {
       return None
     }
-    let f = Formula::mk_and_with(|conjs| {
+    let f = Formula::mk_and_with(bump, |conjs| {
       for (i, j) in self.cases.iter().tuple_combinations() {
-        let f = Formula::mk_and_with(|disj| {
-          i.guard.clone().append_conjuncts_to(disj);
-          j.guard.clone().append_conjuncts_to(disj);
-          i.case.it_eq(g).mk_iff(j.case.it_eq(g)).mk_neg().append_conjuncts_to(disj);
+        let f = Formula::mk_and_with(bump, |disj| {
+          i.guard.clone_in(bump).append_conjuncts_to(bump, disj);
+          j.guard.clone_in(bump).append_conjuncts_to(bump, disj);
+          i.case.it_eq(g, bump).mk_iff(j.case.it_eq(g, bump), bump).mk_neg(bump).append_conjuncts_to(bump, disj);
         });
-        f.mk_neg().append_conjuncts_to(conjs);
+        f.mk_neg(bump).append_conjuncts_to(bump, conjs);
       }
     });
-    Some(Box::new(match it_type {
-      Some(it_type) => AbstractIt::forall0(it_type, f, true),
+    Some(match it_type {
+      Some(it_type) => AbstractIt::forall0(it_type, f, true, bump),
       None => f,
-    }))
+    })
   }
 
-  fn by_cases(&self, lift: u32, neg_f: impl Fn(&T) -> Formula) -> Box<Formula> {
-    let mut els = self.otherwise.as_ref().map(|_| vec![]);
-    Box::new(Formula::mk_and_with(|conjs| {
+  fn by_cases(&self, lift: u32, bump: &'a bumpalo::Bump, neg_f: impl Fn(&T) -> Formula<'a>) -> Formula<'a> {
+    let mut els = self.otherwise.as_ref().map(|_| bumpalo::collections::Vec::new_in(bump));
+    Formula::mk_and_with(bump, |conjs| {
       for def in &*self.cases {
-        let f = Formula::mk_and_with(|disj| {
-          let mut guard = def.guard.clone();
+        let f = Formula::mk_and_with(bump, |disj| {
+          let mut guard = def.guard.clone_in(bump);
           if lift != 0 {
             OnVarMut(|n| *n += lift).visit_formula(&mut guard);
           }
           if let Some(els) = &mut els {
-            guard.clone().mk_neg().append_conjuncts_to(els)
+            guard.clone_in(bump).mk_neg(bump).append_conjuncts_to(bump, els)
           }
-          guard.append_conjuncts_to(disj);
-          neg_f(&def.case).append_conjuncts_to(disj);
+          guard.append_conjuncts_to(bump, disj);
+          neg_f(&def.case).append_conjuncts_to(bump, disj);
         });
-        f.mk_neg().append_conjuncts_to(conjs);
+        f.mk_neg(bump).append_conjuncts_to(bump, conjs);
       }
       if let (Some(mut els), Some(ow)) = (els, &self.otherwise) {
-        neg_f(ow).append_conjuncts_to(&mut els);
-        Formula::mk_and(els).mk_neg().append_conjuncts_to(conjs)
+        neg_f(ow).append_conjuncts_to(bump, &mut els);
+        Formula::mk_and(els, bump).mk_neg(bump).append_conjuncts_to(bump, conjs)
       }
-    }))
+    })
   }
 
-  fn iffthm_for(&self, g: &Global, defines: &Formula) -> Box<Formula> {
-    self.by_cases(0, |case| defines.clone().mk_iff(case.it_eq(g)).mk_neg())
+  fn iffthm_for(&self, g: &Global, defines: &Formula<'a>, bump: &'a bumpalo::Bump) -> Formula<'a> {
+    self.by_cases(0, bump, |case| defines.clone_in(bump).mk_iff(case.it_eq(g, bump), bump).mk_neg(bump))
   }
 
-  fn defthm_for(&self, g: &Global, defines: &T) -> Box<Formula> {
-    self.by_cases(0, |case| defines.mk_eq(g, case).mk_neg())
+  fn defthm_for(&self, g: &Global, defines: &T, bump: &'a bumpalo::Bump) -> Formula<'a> {
+    self.by_cases(0, bump, |case| defines.mk_eq(g, case, bump).mk_neg(bump))
   }
 
   fn mk_compatibility(
-    &self, g: &Global, it_type: Option<&Type>, defines: &Formula,
-  ) -> Box<Formula> {
-    let mut f = self.iffthm_for(g, defines);
+    &self, g: &Global, it_type: Option<&Type>, defines: &Formula<'a>, bump: &'a bumpalo::Bump,
+  ) -> Formula<'a> {
+    let mut f = self.iffthm_for(g, defines, bump);
     if let Some(it_type) = it_type {
-      *f = AbstractIt::forall0(it_type, std::mem::take(&mut *f), true)
+      f = AbstractIt::forall0(it_type, f, true, bump)
     }
     f
   }
 }
 
-impl DefBody<Formula> {
-  fn mk_existence(&self, it_type: &Type) -> Box<Formula> {
-    self.by_cases(0, |case| AbstractIt::forall0(it_type, case.clone(), false))
+impl<'a> DefBody<Formula<'a>> {
+  fn mk_existence(&self, it_type: &Type, bump: &'a bumpalo::Bump) -> Formula<'a> {
+    self.by_cases(0, bump, |case| AbstractIt::forall0(it_type, case.clone_in(bump), false, bump))
   }
 
-  fn mk_uniqueness(&self, g: &Global, it_type: &Type) -> Box<Formula> {
-    let scope = self.by_cases(2, |case| {
-      Formula::mk_and_with(|conjs| {
-        case.visit_cloned(&mut AbstractIt(0, 2)).append_conjuncts_to(conjs);
-        case.visit_cloned(&mut AbstractIt(1, 2)).append_conjuncts_to(conjs);
-        conjs.push(g.reqs.mk_eq(Term::Bound(BoundId(0)), Term::Bound(BoundId(1))).mk_neg())
+  fn mk_uniqueness(&self, g: &Global, it_type: &Type, bump: &'a bumpalo::Bump) -> Formula<'a> {
+    let scope = self.by_cases(2, bump, |case| {
+      Formula::mk_and_with(bump, |conjs| {
+        case.visit_cloned(&mut AbstractIt(0, 2)).append_conjuncts_to(bump, conjs);
+        case.visit_cloned(&mut AbstractIt(1, 2)).append_conjuncts_to(bump, conjs);
+        conjs.push(g.reqs.mk_eq(Term::Bound(BoundId(0)), Term::Bound(BoundId(1))).mk_neg(bump))
       })
     });
     let it_type2 = it_type.visit_cloned(&mut AbstractIt(0, 1));
-    Box::new(Formula::forall0(it_type.clone(), Formula::forall0(it_type2, *scope)))
+    Formula::forall0(it_type.clone(), Formula::forall0(it_type2, scope, bump), bump)
   }
 }
 
-impl DefBody<Term> {
-  fn mk_coherence(&self, it_type: &Type) -> Box<Formula> {
-    self.by_cases(0, |case| {
-      Formula::Is { term: Box::new(case.clone()), ty: Box::new(it_type.clone()) }.mk_neg()
+impl<'a> DefBody<Term> {
+  fn mk_coherence(&self, it_type: &Type, bump: &'a bumpalo::Bump) -> Formula<'a> {
+    self.by_cases(0, bump, |case| {
+      Formula::Is { term: Box::new(case.clone()), ty: Box::new(it_type.clone()) }.mk_neg(bump)
     })
   }
 }
 
-fn mk_mode_coherence(
+fn mk_mode_coherence<'a>(
   ctx: &Constructors, lc: &LocalContext, nr: ModeId, attrs: &Attrs, args: Vec<Term>, it_type: &Type,
-) -> Box<Formula> {
-  Box::new(Formula::forall0(
+  bump: &'a bumpalo::Bump,
+) -> Formula<'a> {
+  Formula::forall0(
     Type {
       kind: TypeKind::Mode(nr),
       attrs: (Attrs::EMPTY, attrs.visit_cloned(&mut Inst::new(ctx, lc, &args, 0))),
       args,
     },
     Formula::Is { term: Box::new(Term::Bound(BoundId(0))), ty: Box::new(it_type.clone()) },
-  ))
+    bump,
+  )
 }
 
-fn mk_func_coherence(nr: FuncId, args: Box<[Term]>, it_type: &Type) -> Box<Formula> {
-  Box::new(Formula::Is {
+fn mk_func_coherence<'a>(nr: FuncId, args: Box<[Term]>, it_type: &Type) -> Formula<'a> {
+  Formula::Is {
     term: Box::new(Term::Functor { nr, args }),
     ty: Box::new(it_type.clone()),
-  })
+  }
 }
 
-impl DefValue {
-  fn mk_consistency(&self, g: &Global, it_type: Option<&Type>) -> Option<Box<Formula>> {
+impl<'a> DefValue<'a> {
+  fn mk_consistency(&self, g: &Global, it_type: Option<&Type>, bump: &'a bumpalo::Bump) -> Option<Formula<'a>> {
     match self {
-      DefValue::Term(value) => value.mk_consistency(g, it_type),
-      DefValue::Formula(value) => value.mk_consistency(g, it_type),
+      DefValue::Term(value) => value.mk_consistency(g, it_type, bump),
+      DefValue::Formula(value) => value.mk_consistency(g, it_type, bump),
     }
   }
 
   fn mk_compatibility(
-    &self, g: &Global, it_type: Option<&Type>, defines: &Formula,
-  ) -> Box<Formula> {
+    &self, g: &Global, it_type: Option<&Type>, defines: &Formula<'a>, bump: &'a bumpalo::Bump,
+  ) -> Formula<'a> {
     match self {
-      DefValue::Term(value) => value.mk_compatibility(g, it_type, defines),
-      DefValue::Formula(value) => value.mk_compatibility(g, it_type, defines),
+      DefValue::Term(value) => value.mk_compatibility(g, it_type, defines, bump),
+      DefValue::Formula(value) => value.mk_compatibility(g, it_type, defines, bump),
     }
   }
 
-  fn as_formula(&self, g: &Global) -> Box<Formula> {
+  fn as_formula(&self, g: &Global, bump: &'a bumpalo::Bump) -> Formula<'a> {
     match self {
-      DefValue::Term(value) => value.by_cases(0, |case| case.it_eq(g).mk_neg()),
-      DefValue::Formula(value) => value.by_cases(0, |case| case.it_eq(g).mk_neg()),
+      DefValue::Term(value) => value.by_cases(0, bump, |case| case.it_eq(g, bump).mk_neg(bump)),
+      DefValue::Formula(value) => value.by_cases(0, bump, |case| case.it_eq(g, bump).mk_neg(bump)),
     }
   }
 }
+
+
 
 struct WithThesis;
 
@@ -3437,10 +3453,10 @@ impl ReconstructThesis {
     loop {
       match self.stack.pop().unwrap() {
         ProofStep::Let { range, istart } => {
-          let mut f = Formula::mk_and(std::mem::take(rec.as_pos(true)));
-          elab.lc.mk_forall(range, istart, true, &mut f);
+          let mut f = Formula::mk_and(bumpalo::collections::Vec::from_iter_in(rec.as_pos(true).drain(..), elab.bump), elab.bump);
+          elab.lc.mk_forall(range, istart, true, &mut f, elab.bump);
           if let Some(theses_rev) = &mut theses_rev {
-            elab.write_xml.on(|_| theses_rev.push(f.clone()));
+            elab.write_xml.on(|_| theses_rev.push(f.clone_in(elab.bump)));
           }
           rec.conjs = vec![f];
         }
@@ -3449,17 +3465,18 @@ impl ReconstructThesis {
           std::mem::swap(&mut conjs, rest);
           rest.append(&mut conjs);
           if let Some(theses_rev) = &mut theses_rev {
-            elab.write_xml.on(|_| theses_rev.push(Formula::mk_and(rest.clone()).mk_neg()));
+            elab.write_xml.on(|_| theses_rev.push(Formula::mk_and(bumpalo::collections::Vec::from_iter_in(rest.iter().map(|f| f.clone_in(elab.bump)), elab.bump), elab.bump).mk_neg(elab.bump)));
           }
         }
         ProofStep::TakeAsVar { range, istart } => {
-          let mut f = Formula::mk_and(std::mem::take(rec.as_pos(false)));
-          elab.lc.mk_forall(range, istart, true, &mut f);
+          let mut f = Formula::mk_and(bumpalo::collections::Vec::from_iter_in(rec.as_pos(false).drain(..), elab.bump), elab.bump);
+          elab.lc.mk_forall(range, istart, true, &mut f, elab.bump);
           if let Some(theses_rev) = &mut theses_rev {
-            elab.write_xml.on(|_| theses_rev.push(f.clone().mk_neg()));
+            elab.write_xml.on(|_| theses_rev.push(f.clone_in(elab.bump).mk_neg(elab.bump)));
           }
           rec.conjs = vec![f];
         }
+
         ProofStep::Thus { mut conjs } => {
           let rest = rec.as_pos(true);
           std::mem::swap(&mut conjs, rest);
@@ -3781,8 +3798,7 @@ impl BlockReader {
     })
   }
 
-  #[allow(clippy::replace_box)] // allow because current variant is fastest
-  fn forall_locus(&self, elab: &Analyzer, mut f: Box<Formula>) -> Box<Formula> {
+  fn forall_locus<'a>(&self, elab: &Analyzer, bump: &'a bumpalo::Bump, mut f: Formula<'a>) -> Formula<'a> {
     self.to_locus(elab, |l| {
       let mut al = AbstractLocus(self.primary.len() as u32);
       for assum in self.assums.iter().rev() {
@@ -3793,21 +3809,26 @@ impl BlockReader {
               let var = &elab.lc.fixed_var[self.to_const[LocusId(al.0 as u8)]];
               let mut ty = var.ty.visit_cloned(l);
               ty.visit(&mut al);
-              f = Box::new(Formula::ForAll { id: var.id, dom: Box::new(ty), scope: f })
+              f = Formula::ForAll {
+                id: var.id,
+                dom: Box::new(ty),
+                scope: bumpalo::boxed::Box::new_in(f, bump),
+              };
             },
           ReconstructAssum::Assum(assums) => {
-            let f2 = f.mk_neg();
-            *f = Formula::mk_and_with(|conjs| {
-              conjs.extend(assums.iter().map(|f| f.visit_cloned(&mut al)));
-              f2.append_conjuncts_to(conjs);
-            })
-            .mk_neg()
+            let f2 = f.mk_neg(bump);
+            let mut conjs = bumpalo::collections::Vec::new_in(bump);
+            conjs.extend(assums.iter().map(|f| f.visit_cloned(&mut al).clone_in(bump)));
+            f2.append_conjuncts_to(bump, &mut conjs);
+            let and_f = Formula::mk_and(conjs, bump);
+            f = and_f.mk_neg(bump);
           }
         }
       }
       f
     })
   }
+
 
   fn check_compatible_args(&self, lc: &LocalContext, subst: &Subst<'_>) {
     let n = self.primary.len().checked_sub(subst.subst_term.len()).expect("too many args");
