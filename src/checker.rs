@@ -15,13 +15,13 @@ use std::marker::PhantomData;
 
 pub struct Checker<'a> {
   pub g: &'a Global,
-  pub lc: &'a mut LocalContext,
+  pub lc: &'a mut LocalContext<'a>,
   pub bump: &'a bumpalo::Bump,
   pub expansions: &'a [Definiens<'a>],
-  pub equals: &'a BTreeMap<ConstrKind, Vec<EqualsDef>>,
-  pub identify: &'a [IdentifyFunc],
+  pub equals: &'a BTreeMap<ConstrKind, Vec<EqualsDef<'a>>>,
+  pub identify: &'a [IdentifyFunc<'a>],
   pub func_ids: &'a BTreeMap<ConstrKind, Vec<usize>>,
-  pub reductions: &'a [Reduction],
+  pub reductions: &'a [Reduction<'a>],
   pub article: Article,
   pub pos: Position,
 }
@@ -252,7 +252,7 @@ pub type OrUnsat<T> = Result<T, Unsat>;
 
 struct Expand<'a> {
   g: &'a Global,
-  lc: &'a mut LocalContext,
+  lc: &'a mut LocalContext<'a>,
   bump: &'a bumpalo::Bump,
   expansions: &'a [Definiens<'a>],
 }
@@ -444,14 +444,14 @@ impl<'a> Formula<'a> {
 }
 
 
-pub trait Open {
-  fn mk_var(n: u32) -> Term;
+pub trait Open<'a> {
+  fn mk_var(n: u32) -> Term<'a>;
   fn base(&self) -> u32;
-  fn new_var(&mut self, id: IdentId, ty: Type);
+  fn new_var(&mut self, id: IdentId, ty: Type<'a>);
 
   /// * pos = true: RemoveIntQuantifier
   /// * pos = false: RemoveExtQuantifier
-  fn open_quantifiers<'a>(&mut self, fmla: &mut Formula<'a>, pos: bool, bump: &'a bumpalo::Bump) {
+  fn open_quantifiers(&mut self, fmla: &mut Formula<'a>, pos: bool, bump: &'a bumpalo::Bump) {
     loop {
       match fmla {
         Formula::Neg { f } => {
@@ -495,10 +495,10 @@ pub trait Open {
 
 struct OpenAsConst<'a, 'b>(&'b mut Checker<'a>);
 
-impl Open for OpenAsConst<'_, '_> {
-  fn mk_var(n: u32) -> Term { Term::Const(ConstId(n)) }
+impl<'a, 'b> Open<'a> for OpenAsConst<'a, 'b> {
+  fn mk_var(n: u32) -> Term<'a> { Term::Const(ConstId(n)) }
   fn base(&self) -> u32 { self.0.lc.fixed_var.len() as u32 }
-  fn new_var(&mut self, id: IdentId, mut ty: Type) {
+  fn new_var(&mut self, id: IdentId, mut ty: Type<'a>) {
     ty.visit(&mut self.0.intern_const());
     self.0.lc.fixed_var.push(FixedVar { id, ty, def: None });
   }
@@ -510,14 +510,14 @@ struct SetVar<O: ?Sized> {
   open: PhantomData<O>,
 }
 
-impl<O: Open + ?Sized> SetVar<O> {
+impl<'a, O: Open<'a> + ?Sized> SetVar<O> {
   fn new(open: &O, depth: u32) -> SetVar<O> {
     SetVar { depth, base: open.base(), open: PhantomData }
   }
 }
 
-impl<O: Open + ?Sized> VisitMut for SetVar<O> {
-  fn visit_term(&mut self, tm: &mut Term) {
+impl<'a, O: Open<'a> + ?Sized> VisitMut for SetVar<O> {
+  fn visit_term(&mut self, tm: &mut Term<'_>) {
     match tm {
       Term::Bound(nr) =>
         if nr.0 >= self.depth {
@@ -787,11 +787,11 @@ where Conjunct<K, V>: std::fmt::Debug
   }
 }
 
-impl Atoms {
+impl<'a> Atoms<'a> {
   /// * pos = true: PreInstCollection.NormalizeAsTrue
   /// * pos = false: PreInstCollection.NormalizeAsFalse
   pub fn normalize(
-    &mut self, g: &Global, lc: &LocalContext, f: Formula, pos: bool,
+    &mut self, g: &Global, lc: &LocalContext, f: Formula<'a>, pos: bool,
   ) -> Result<Dnf<AtomId, bool>, Overflow> {
     match f {
       Formula::Neg { f } => self.normalize(g, lc, *f, !pos),
@@ -829,21 +829,21 @@ enum FuncKind {
 }
 
 #[derive(Clone, Default)]
-struct SchemeSubst {
-  cnst: IdxVec<SchFuncId, Option<Term>>,
+struct SchemeSubst<'a> {
+  cnst: IdxVec<SchFuncId, Option<Term<'a>>>,
   func: IdxVec<SchFuncId, Option<FuncKind>>,
   pred: IdxVec<SchPredId, Option<(bool, PredKind)>>,
 }
 
 struct SchemeCtx<'a> {
   g: &'a Global,
-  lc: &'a mut LocalContext,
-  primary: &'a [Type],
-  subst: SchemeSubst,
+  lc: &'a mut LocalContext<'a>,
+  primary: &'a [Type<'a>],
+  subst: SchemeSubst<'a>,
 }
-impl WithGlobalLocal for SchemeCtx<'_> {
+impl<'a> WithGlobalLocal<'a> for SchemeCtx<'a> {
   fn global(&self) -> &Global { self.g }
-  fn local(&self) -> &LocalContext { self.lc }
+  fn local(&self) -> &LocalContext<'a> { self.lc }
 }
 
 impl<'a> SchemeCtx<'a> {

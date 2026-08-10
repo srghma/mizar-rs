@@ -34,13 +34,13 @@ pub fn report_accom_warning(kind: DirectiveKind, path: PathBuf, art: Article, po
 }
 
 #[derive(Debug)]
-pub enum MizError {
+pub enum MizError<'a> {
   UnexpectedPragma(String),
-  IterEqualityNotAnEquality(Box<Formula>),
+  IterEqualityNotAnEquality(Box<Formula<'a>>),
 }
 
-impl MizError {
-  pub fn report(self, art: Article, pos: Position, _g: &Global, lc: &LocalContext) -> bool {
+impl<'a> MizError<'a> {
+  pub fn report(self, art: Article, pos: Position, _g: &Global, lc: &LocalContext<'a>) -> bool {
     let severity = Severity::Error;
     let msg = match &self {
       MizError::UnexpectedPragma(pragma) => format!("unknown pragma '{pragma}'"),

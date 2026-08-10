@@ -1035,14 +1035,14 @@ struct PropertyAttrs {
   kind: PropertyKind,
 }
 
-impl MizReader<'_> {
-  fn parse_type_vid(&mut self, buf: &mut Vec<u8>) -> Result<Option<(Type, IdentId)>> {
+impl<'a> MizReader<'a> {
+  fn parse_type_vid(&mut self, buf: &mut Vec<u8>) -> Result<Option<(Type<'a>, IdentId)>> {
     Ok(match self.parse_elem(buf)? {
       Elem::Type(ty, id) => Some((ty, id)),
       _ => None,
     })
   }
-  fn parse_type(&mut self, buf: &mut Vec<u8>) -> Result<Option<Type>> {
+  fn parse_type(&mut self, buf: &mut Vec<u8>) -> Result<Option<Type<'a>>> {
     Ok(self.parse_type_vid(buf)?.map(|t| t.0))
   }
 
@@ -1920,11 +1920,11 @@ impl MizReader<'_> {
 
 #[derive(Debug)]
 enum Elem<'a> {
-  Type(Type, IdentId),
-  Term(Term),
+  Type(Type<'a>, IdentId),
+  Term(Term<'a>),
   Formula(Formula<'a>),
   Properties(Properties),
-  ArgTypes(Box<[Type]>),
+  ArgTypes(Box<[Type<'a>]>),
   Fields(Box<[SelId]>),
   Essentials(Box<[LocusId]>),
   DefMeaning(DefValue<'a>),
@@ -1939,18 +1939,18 @@ enum Elem<'a> {
   End,
 }
 
-impl<'a> TryFrom<Elem<'a>> for Type {
+impl<'a> TryFrom<Elem<'a>> for Type<'a> {
   type Error = ();
-  fn try_from(e: Elem<'a>) -> StdResult<Type, Self::Error> {
+  fn try_from(e: Elem<'a>) -> StdResult<Type<'a>, Self::Error> {
     match e {
       Elem::Type(v, _) => Ok(v),
       _ => Err(()),
     }
   }
 }
-impl<'a> TryFrom<Elem<'a>> for Term {
+impl<'a> TryFrom<Elem<'a>> for Term<'a> {
   type Error = ();
-  fn try_from(e: Elem<'a>) -> StdResult<Term, Self::Error> {
+  fn try_from(e: Elem<'a>) -> StdResult<Term<'a>, Self::Error> {
     match e {
       Elem::Term(v) => Ok(v),
       _ => Err(()),

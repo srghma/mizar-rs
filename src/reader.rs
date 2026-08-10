@@ -16,7 +16,7 @@ mk_id! {
 
 pub struct Reader<'a> {
   pub g: Global,
-  pub lc: LocalContext,
+  pub lc: LocalContext<'a>,
   pub bump: &'a bumpalo::Bump,
   pub libs: Libraries<'a>,
   pub article: Article,
@@ -29,7 +29,7 @@ pub struct Reader<'a> {
   pub has_errors: bool,
   pub formats_base: usize,
   /// Notat
-  pub notations: EnumMap<PatternKindClass, ExtVec<Pattern>>,
+  pub notations: EnumMap<PatternKindClass, ExtVec<Pattern<'a>>>,
   /// Definientia
   pub definitions: IdxVec<DefiniensId, Definiens<'a>>,
   /// EqDefinientia
@@ -37,23 +37,23 @@ pub struct Reader<'a> {
   /// ExDefinientia
   pub expansions: Vec<Definiens<'a>>,
   /// gPropertiesList
-  pub properties: Vec<Property>,
+  pub properties: Vec<Property<'a>>,
   /// gIdentifications
-  pub identify: Vec<IdentifyFunc>,
+  pub identify: Vec<IdentifyFunc<'a>>,
   /// gReductions
-  pub reductions: Vec<Reduction>,
-  pub equals: BTreeMap<ConstrKind, Vec<EqualsDef>>,
+  pub reductions: Vec<Reduction<'a>>,
+  pub equals: BTreeMap<ConstrKind, Vec<EqualsDef<'a>>>,
   pub func_ids: BTreeMap<ConstrKind, Vec<usize>>,
   props: Vec<Formula<'a>>,
   labels: IdxVec<LabelId, Option<usize>>,
-  pending_defs: Vec<PendingDef>,
+  pending_defs: Vec<PendingDef<'a>>,
   pub def_map: HashMap<DefRef, DefiniensId>,
   pub pos: Position,
   pub progress: Option<ProgressBar>,
 }
-impl<'a> WithGlobalLocal for Reader<'a> {
+impl<'a> WithGlobalLocal<'a> for Reader<'a> {
   fn global(&self) -> &Global { &self.g }
-  fn local(&self) -> &LocalContext { &self.lc }
+  fn local(&self) -> &LocalContext<'a> { &self.lc }
 }
 
 

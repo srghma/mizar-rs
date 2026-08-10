@@ -160,13 +160,13 @@ impl Global {
 
 }
 
-pub struct RoundUpTypes<'a> {
+pub struct RoundUpTypes<'a, 'b> {
   g: &'a Global,
-  lc: &'a mut LocalContext,
+  lc: &'a mut LocalContext<'b>,
 }
 
-impl RoundUpTypes<'_> {
-  pub fn with(g: &Global, lc: &mut LocalContext, f: impl FnOnce(&mut RoundUpTypes<'_>)) {
+impl<'a, 'b> RoundUpTypes<'a, 'b> {
+  pub fn with(g: &'a Global, lc: &'a mut LocalContext<'b>, f: impl FnOnce(&mut RoundUpTypes<'a, 'b>)) {
     lc.term_cache.get_mut().open_scope();
     f(&mut RoundUpTypes { g, lc });
     lc.term_cache.get_mut().close_scope();
@@ -245,12 +245,12 @@ fn sorted_subset<T: Ord>(a: &[T], b: &[T]) -> bool {
   true
 }
 
-impl Attr {
+impl<'a> Attr<'a> {
   pub fn adjusted_nr(&self, ctx: &Constructors) -> AttrId {
     ctx.attribute[self.nr].c.redefines.unwrap_or(self.nr)
   }
 
-  pub fn adjust(&self, ctx: Option<&Constructors>) -> (AttrId, &[Term]) {
+  pub fn adjust(&self, ctx: Option<&Constructors>) -> (AttrId, &[Term<'a>]) {
     let Some(ctx) = ctx else { return (self.nr, &self.args) };
     let c = &ctx.attribute[self.nr].c;
     let Some(nr) = c.redefines else { return (self.nr, &self.args) };
@@ -280,14 +280,14 @@ pub enum CmpStyle {
   Alt,
 }
 
-impl Term {
-  fn locus_list(n: usize) -> Box<[Term]> {
+impl<'b> Term<'b> {
+  fn locus_list(n: usize) -> Box<[Term<'b>]> {
     (0..n).map(|i| Term::Locus(Idx::from_usize(i))).collect()
   }
 
   pub fn adjust<'a>(
-    n: FuncId, args: &'a [Term], ctx: Option<&Constructors>,
-  ) -> (FuncId, &'a [Term]) {
+    n: FuncId, args: &'a [Term<'b>], ctx: Option<&Constructors>,
+  ) -> (FuncId, &'a [Term<'b>]) {
     let Some(ctx) = ctx else { return (n, args) };
     let c = &ctx.functor[n].c;
     let Some(nr) = c.redefines else { return (n, args) };
@@ -407,7 +407,7 @@ impl Term {
   }
 
   /// ReconSelectTrm
-  pub fn mk_select(g: &Global, lc: &LocalContext, nr: SelId, arg: &Term, ty: &Type) -> Term {
+  pub fn mk_select(g: &Global, lc: &LocalContext, nr: SelId, arg: &Term<'b>, ty: &Type<'b>) -> Term<'b> {
     assert!(matches!(ty.kind, TypeKind::Struct(_)));
     let mut args =
       Type::new(g.parent_struct(nr).into()).widening_of(g, lc, ty).unwrap().to_owned().args;
@@ -417,7 +417,7 @@ impl Term {
 
   /// ReconAggregTrm
   /// performs eta expansion of aggregates: `foo` ~> `(# foo.1 , foo.2 #)`
-  pub fn mk_aggr(g: &Global, lc: &LocalContext, s: StructId, arg: &Term, ty: &Type) -> Term {
+  pub fn mk_aggr(g: &Global, lc: &LocalContext, s: StructId, arg: &Term<'b>, ty: &Type<'b>) -> Term<'b> {
     assert!(!g.constrs.struct_mode[s].fields.is_empty());
     let nr = g.constrs.struct_mode[s].aggr;
     let ty = &*Type::new(s.into()).widening_of(g, lc, ty).unwrap();
@@ -431,7 +431,7 @@ impl Term {
 
 struct WideningStruct<'a> {
   g: &'a Global,
-  stack: Vec<Option<&'a Type>>,
+  stack: Vec<Option<&'a Type<'a>>>,
   tgt: StructId,
 }
 
@@ -469,8 +469,8 @@ fn cmp_list<T>(a: &[T], b: &[T], mut cmp: impl FnMut(&T, &T) -> Ordering) -> Ord
   Ordering::Equal
 }
 
-impl Type {
-  pub fn adjust<'a>(n: ModeId, args: &'a [Term], ctx: &Constructors) -> (ModeId, &'a [Term]) {
+impl<'b> Type<'b> {
+  pub fn adjust<'a>(n: ModeId, args: &'a [Term<'b>], ctx: &Constructors) -> (ModeId, &'a [Term<'b>]) {
     let c = &ctx.mode[n].c;
     match c.redefines {
       Some(mode) => (mode, &args[c.superfluous as usize..]),
@@ -640,10 +640,10 @@ impl Type {
   }
 }
 
-impl Formula {
+impl<'b> Formula<'b> {
   pub fn adjust_pred<'a>(
-    n: PredId, args: &'a [Term], ctx: Option<&Constructors>,
-  ) -> (PredId, &'a [Term]) {
+    n: PredId, args: &'a [Term<'b>], ctx: Option<&Constructors>,
+  ) -> (PredId, &'a [Term<'b>]) {
     let Some(ctx) = ctx else { return (n, args) };
     let c = &ctx.predicate[n];
     let Some(nr) = c.redefines else { return (n, args) };
@@ -651,8 +651,8 @@ impl Formula {
   }
 
   pub fn adjust_attr<'a>(
-    n: AttrId, args: &'a [Term], ctx: Option<&Constructors>,
-  ) -> (AttrId, &'a [Term]) {
+    n: AttrId, args: &'a [Term<'b>], ctx: Option<&Constructors>,
+  ) -> (AttrId, &'a [Term<'b>]) {
     let Some(ctx) = ctx else { return (n, args) };
     let c = &ctx.attribute[n].c;
     let Some(nr) = c.redefines else { return (n, args) };
@@ -721,7 +721,7 @@ impl Formula {
 
 pub struct EqCtx<'a> {
   pub g: &'a Global,
-  pub lc: &'a LocalContext,
+  pub lc: &'a LocalContext<'a>,
   pub depth1: u32,
   pub depth2: u32,
   lift1: u32,
@@ -729,7 +729,7 @@ pub struct EqCtx<'a> {
 }
 
 impl<'a> EqCtx<'a> {
-  pub fn new(g: &'a Global, lc: &'a LocalContext) -> Self {
+  pub fn new(g: &'a Global, lc: &'a LocalContext<'a>) -> Self {
     let depth = lc.bound_var.len() as u32;
     Self { g, lc, depth1: depth, depth2: depth, lift1: 0, lift2: 0 }
   }
@@ -987,22 +987,35 @@ impl<A: Equatable + ?Sized> Equatable for Box<A> {
     (**self).equate(t, ctx, other)
   }
 }
-macro_rules! impl_equatable {
-  ($($name:ident($ty:ty),)*) => {$(
-    impl Equatable for $ty {
-      fn equate<T: Equate + ?Sized>(&self, t: &mut T, ctx: &mut EqCtx<'_>, other: &Self) -> bool {
-        t.$name(ctx, self, other)
-      }
-    }
-  )*}
+impl<'a> Equatable for Term<'a> {
+  fn equate<T: Equate + ?Sized>(&self, t: &mut T, ctx: &mut EqCtx<'_>, other: &Self) -> bool {
+    t.eq_term(ctx, self, other)
+  }
 }
-impl_equatable! {
-  eq_term(Term),
-  eq_terms([Term]),
-  eq_type(Type),
-  eq_attr(Attr),
-  eq_formula(Formula),
-  eq_formulas([Formula]),
+impl<'a> Equatable for [Term<'a>] {
+  fn equate<T: Equate + ?Sized>(&self, t: &mut T, ctx: &mut EqCtx<'_>, other: &Self) -> bool {
+    t.eq_terms(ctx, self, other)
+  }
+}
+impl<'a> Equatable for Type<'a> {
+  fn equate<T: Equate + ?Sized>(&self, t: &mut T, ctx: &mut EqCtx<'_>, other: &Self) -> bool {
+    t.eq_type(ctx, self, other)
+  }
+}
+impl<'a> Equatable for Attr<'a> {
+  fn equate<T: Equate + ?Sized>(&self, t: &mut T, ctx: &mut EqCtx<'_>, other: &Self) -> bool {
+    t.eq_attr(ctx, self, other)
+  }
+}
+impl<'a> Equatable for Formula<'a> {
+  fn equate<T: Equate + ?Sized>(&self, t: &mut T, ctx: &mut EqCtx<'_>, other: &Self) -> bool {
+    t.eq_formula(ctx, self, other)
+  }
+}
+impl<'a> Equatable for [Formula<'a>] {
+  fn equate<T: Equate + ?Sized>(&self, t: &mut T, ctx: &mut EqCtx<'_>, other: &Self) -> bool {
+    t.eq_formulas(ctx, self, other)
+  }
 }
 
 impl Global {
@@ -1019,20 +1032,21 @@ impl Global {
     self.with_eq(lc, |ctx| ().eq_attrs(ctx, a, b))
   }
 }
-pub trait WithGlobalLocal {
+pub trait WithGlobalLocal<'a> {
   fn global(&self) -> &Global;
-  fn local(&self) -> &LocalContext;
-  fn with_eq<'a, R>(&'a self, f: impl FnOnce(&mut EqCtx<'a>) -> R) -> R {
+  fn local(&self) -> &LocalContext<'a>;
+  fn with_eq<'b, R>(&'b self, f: impl FnOnce(&mut EqCtx<'b>) -> R) -> R
+  where 'a: 'b {
     f(&mut EqCtx::new(self.global(), self.local()))
   }
   fn eq<T: Equatable + ?Sized>(&self, a: &T, b: &T) -> bool {
     self.with_eq(|ctx| a.equate(&mut (), ctx, b))
   }
-  fn eq_radices(&self, a: &Type, b: &Type) -> bool { self.with_eq(|ctx| ().eq_radices(ctx, a, b)) }
+  fn eq_radices(&self, a: &Type<'a>, b: &Type<'a>) -> bool { self.with_eq(|ctx| ().eq_radices(ctx, a, b)) }
 }
-impl WithGlobalLocal for (&Global, &LocalContext) {
+impl<'a> WithGlobalLocal<'a> for (&'a Global, &'a LocalContext<'a>) {
   fn global(&self) -> &Global { self.0 }
-  fn local(&self) -> &LocalContext { self.1 }
+  fn local(&self) -> &LocalContext<'a> { self.1 }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1040,7 +1054,7 @@ pub struct Subst<'a> {
   // subst_ty: Vec<Option<Box<Term>>>,
   /// gSubstTrm
   /// `IdxVec<LocusId, Option<Box<Term>>>` but fixed length
-  pub subst_term: Box<[Option<CowBox<'a, TermQua>>]>,
+  pub subst_term: Box<[Option<CowBox<'a, TermQua<'a>>>]>,
 }
 
 macro_rules! mk_visit {
@@ -1245,7 +1259,7 @@ mk_visit!(VisitMut, mut);
 
 pub struct OnVarMut<F: FnMut(&mut u32)>(pub F);
 impl<F: FnMut(&mut u32)> VisitMut for OnVarMut<F> {
-  fn visit_term(&mut self, tm: &mut Term) {
+  fn visit_term(&mut self, tm: &mut Term<'_>) {
     self.super_visit_term(tm);
     if let Term::Bound(BoundId(nr)) = tm {
       self.0(nr)
@@ -1312,22 +1326,22 @@ fn has_func<'a>(ctx: &'a Constructors, nr: FuncId, found: &'a mut bool) -> impl 
 
 pub struct Inst<'a> {
   ctx: &'a Constructors,
-  lc: &'a LocalContext,
-  subst: &'a [Term],
+  lc: &'a LocalContext<'a>,
+  subst: &'a [Term<'a>],
   base: u32,
   depth: u32,
 }
 
 impl<'a> Inst<'a> {
-  pub fn new(ctx: &'a Constructors, lc: &'a LocalContext, subst: &'a [Term], base: u32) -> Self {
+  pub fn new(ctx: &'a Constructors, lc: &'a LocalContext<'a>, subst: &'a [Term<'a>], base: u32) -> Self {
     Self { ctx, lc, subst, base, depth: 0 }
   }
 }
 
-impl VisitMut for Inst<'_> {
-  fn push_bound(&mut self, _: IdentId, _: &mut Type) { self.depth += 1 }
+impl<'a> VisitMut for Inst<'a> {
+  fn push_bound(&mut self, _: IdentId, _: &mut Type<'_>) { self.depth += 1 }
   fn pop_bound(&mut self, n: u32) { self.depth -= n }
-  fn visit_term(&mut self, tm: &mut Term) {
+  fn visit_term(&mut self, tm: &mut Term<'_>) {
     match *tm {
       Term::Bound(ref mut nr) => nr.0 += self.base,
       Term::Locus(nr) => {
@@ -1352,10 +1366,10 @@ impl VisitMut for Inst<'_> {
   }
 }
 
-pub struct Inst0<'a>(pub u32, pub &'a Term);
+pub struct Inst0<'a>(pub u32, pub &'a Term<'a>);
 impl VisitMut for Inst0<'_> {
   /// ReplacePlaceHolderByConjunctNumber
-  fn visit_term(&mut self, tm: &mut Term) {
+  fn visit_term(&mut self, tm: &mut Term<'_>) {
     match tm {
       Term::Bound(nr) => match nr.0.cmp(&self.0) {
         Ordering::Less => {}
@@ -1367,7 +1381,7 @@ impl VisitMut for Inst0<'_> {
   }
 }
 
-impl Term {
+impl<'a> Term<'a> {
   pub fn has_func(&self, ctx: &Constructors, nr: FuncId) -> bool {
     let mut found = false;
     has_func(ctx, nr, &mut found).visit_term(self);
@@ -1375,18 +1389,18 @@ impl Term {
   }
 
   /// RoundUpTrmType(fTrm = self)
-  pub fn round_up_type<'a>(
-    &self, g: &Global, lc: &'a LocalContext, recursive: bool,
-  ) -> CowBox<'a, Type> {
+  pub fn round_up_type<'b>(
+    &self, g: &Global, lc: &'b LocalContext<'a>, recursive: bool,
+  ) -> CowBox<'b, Type<'a>> {
     let tm = self.skip_priv_func(Some(lc));
     let ty = Box::new(tm.get_type_uncached(g, lc));
     tm.round_up_type_from(g, lc, CowBox::Owned(ty), recursive)
   }
 
   /// RoundUpTrmTypeWithType(lTyp = ty, fTrm = self)
-  fn round_up_type_from<'a>(
-    &self, g: &Global, lc: &'a LocalContext, mut ty: CowBox<'a, Type>, recursive: bool,
-  ) -> CowBox<'a, Type> {
+  fn round_up_type_from<'b>(
+    &self, g: &Global, lc: &'b LocalContext<'a>, mut ty: CowBox<'b, Type<'a>>, recursive: bool,
+  ) -> CowBox<'b, Type<'a>> {
     // vprintln!("RoundUpTrmTypeWithType {self:?}, {ty:?}");
     if let Term::Functor { .. } | Term::Selector { .. } | Term::Aggregate { .. } = self {
       let mut attrs = ty.attrs.1.clone();
@@ -1482,12 +1496,12 @@ impl Term {
 }
 
 #[derive(Default)]
-pub struct TermCollection {
+pub struct TermCollection<'a> {
   scope: u32,
-  pub terms: Vec<(Term, Type, u32)>,
+  pub terms: Vec<(Term<'a>, Type<'a>, u32)>,
 }
 
-impl TermCollection {
+impl<'a> TermCollection<'a> {
   /// MarkTermsInTTColl
   pub fn open_scope(&mut self) {
     // vprintln!("[{}] open scope", self.scope);
@@ -1603,28 +1617,28 @@ impl<'a> Subst<'a> {
   }
 
   /// InitInst
-  pub fn finish(self) -> Box<[Term]> {
+  pub fn finish(self) -> Box<[Term<'a>]> {
     self.subst_term.into_vec().into_iter().map(|t| *t.unwrap().to_owned()).collect()
   }
 
-  pub fn trim_to(self, len: usize) -> Box<[TermQua]> {
+  pub fn trim_to(self, len: usize) -> Box<[TermQua<'a>]> {
     let n = self.subst_term.len().checked_sub(len).unwrap();
     self.subst_term.into_vec().into_iter().skip(n).map(|t| *t.unwrap().to_owned()).collect()
   }
 
-  pub fn inst_term_mut(self, ctx: &Constructors, lc: &LocalContext, tm: &mut Term, base: u32) {
+  pub fn inst_term_mut(self, ctx: &Constructors, lc: &LocalContext<'a>, tm: &mut Term<'a>, base: u32) {
     Inst::new(ctx, lc, &self.finish(), base).visit_term(tm)
   }
 
   /// InstSubstTrm
-  pub fn inst_term(self, ctx: &Constructors, lc: &LocalContext, tm: &Term, base: u32) -> Term {
+  pub fn inst_term(self, ctx: &Constructors, lc: &LocalContext<'a>, tm: &Term<'a>, base: u32) -> Term<'a> {
     let mut tm = tm.clone();
     self.inst_term_mut(ctx, lc, &mut tm, base);
     tm
   }
 
   /// InstSubstFrm
-  pub fn inst_formula_mut(self, ctx: &Constructors, lc: &LocalContext, f: &mut Formula, base: u32) {
+  pub fn inst_formula_mut(self, ctx: &Constructors, lc: &LocalContext<'a>, f: &mut Formula<'a>, base: u32) {
     Inst::new(ctx, lc, &self.finish(), base).visit_formula(f)
   }
 
@@ -1644,7 +1658,7 @@ impl<'a> Subst<'a> {
   /// NEW = true: CheckLociTypesN
   /// round_up: ItIsChecker
   pub fn check_loci_types<const NEW: bool>(
-    &mut self, g: &Global, lc: &LocalContext, tys: &[Type], round_up: bool,
+    &mut self, g: &Global, lc: &LocalContext<'a>, tys: &[Type<'a>], round_up: bool,
   ) -> bool {
     let mut i = tys.len();
     assert!(self.subst_term.len() == i);
@@ -1819,14 +1833,14 @@ impl Equate for Subst<'_> {
   }
 }
 
-pub struct ConjIter<'a>(pub std::slice::Iter<'a, Formula>, pub Option<Box<ConjIter<'a>>>);
+pub struct ConjIter<'a>(pub std::slice::Iter<'a, Formula<'a>>, pub Option<Box<ConjIter<'a>>>);
 
 impl<'a> Default for ConjIter<'a> {
   fn default() -> Self { Self([].iter(), None) }
 }
 
 impl<'a> Iterator for ConjIter<'a> {
-  type Item = &'a Formula;
+  type Item = &'a Formula<'a>;
   fn next(&mut self) -> Option<Self::Item> {
     loop {
       match self.0.next() {
@@ -1841,7 +1855,7 @@ impl<'a> Iterator for ConjIter<'a> {
   }
 }
 
-impl Formula {
+impl<'b> Formula<'b> {
   pub fn skip_priv_pred(&self) -> &Self {
     let mut ty = self;
     loop {
@@ -1867,15 +1881,15 @@ impl Formula {
     }
   }
 }
-impl Attrs {
-  pub fn push(&mut self, attr: Attr) {
+impl<'a> Attrs<'a> {
+  pub fn push(&mut self, attr: Attr<'a>) {
     if let Self::Consistent(attrs) = self {
       attrs.push(attr)
     }
   }
 
   /// MAttrCollection.IsSubsetOf(self = self, aClu = other, aEqAttr(x, y) = eq(y, x))
-  pub fn is_subset_of(&self, other: &Self, mut eq: impl FnMut(&Attr, &Attr) -> bool) -> bool {
+  pub fn is_subset_of(&self, other: &Self, mut eq: impl FnMut(&Attr<'a>, &Attr<'a>) -> bool) -> bool {
     // let n = CALLS2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     // vprintln!("{n:?}: {self:?} <:? {other:?}");
     match (self, other) {
@@ -2002,7 +2016,7 @@ impl Attrs {
 
   /// MAttrCollection.EnlargeBy(self = self, aAnother = other, CopyAttribute = map)
   pub fn enlarge_by_map(
-    &mut self, ctx: &Constructors, lc: &LocalContext, other: &Self, map: impl FnMut(&Attr) -> Attr,
+    &mut self, ctx: &Constructors, lc: &LocalContext<'a>, other: &Self, map: impl FnMut(&Attr<'a>) -> Attr<'a>,
   ) {
     if let Self::Consistent(this) = self {
       if let Self::Consistent(other) = other {
@@ -2116,10 +2130,10 @@ impl Attrs {
   }
 }
 
-impl ConditionalCluster {
+impl<'a> ConditionalCluster<'a> {
   pub fn try_apply(
-    &self, g: &Global, lc: &LocalContext, attrs: &Attrs, ty: &Type, round_up: bool,
-  ) -> Option<Box<[Term]>> {
+    &self, g: &Global, lc: &LocalContext<'a>, attrs: &Attrs<'a>, ty: &Type<'a>, round_up: bool,
+  ) -> Option<Box<[Term<'a>]>> {
     if !g.type_reachable(&self.ty, ty) {
       return None
     }
@@ -2145,8 +2159,8 @@ impl ConditionalCluster {
   }
 }
 
-impl<I> TyConstructor<I> {
-  fn round_up(&self, g: &Global, lc: &mut LocalContext) -> Attrs {
+impl<'a, I> TyConstructor<'a, I> {
+  fn round_up(&self, g: &Global, lc: &mut LocalContext<'a>) -> Attrs {
     let mut attrs = self.ty.attrs.0.clone();
     if let TypeKind::Mode(nr) = self.ty.kind {
       let mut inst = Inst::new(&g.constrs, lc, &self.ty.args, 0);
@@ -2160,10 +2174,10 @@ impl<I> TyConstructor<I> {
   }
 }
 
-impl FunctorCluster {
+impl<'a> FunctorCluster<'a> {
   /// RoundUpWith(fCluster = self, fTrm = term, fTyp = ty, fClusterPtr = attrs)
   pub fn round_up_with(
-    &self, g: &Global, lc: &LocalContext, term: &Term, ty: &Type, attrs: &mut Attrs,
+    &self, g: &Global, lc: &LocalContext<'a>, term: &Term<'a>, ty: &Type<'a>, attrs: &mut Attrs<'a>,
     recursive: bool,
   ) -> bool {
     // vprintln!("RoundUpWith {term:?}, {ty:?} <- {attrs:?} in {self:#?}");
@@ -2202,9 +2216,9 @@ impl FunctorCluster {
   }
 }
 
-impl Definiens {
+impl<'a> Definiens<'a> {
   /// EqualsExpansion
-  pub fn equals_expansion(&self) -> Option<EqualsDef> {
+  pub fn equals_expansion(&self) -> Option<EqualsDef<'a>> {
     let ConstrKind::Func(nr) = self.constr else { return None };
     let Formula::True = self.assumptions else { return None };
     let DefValue::Term(DefBody { cases, otherwise: Some(ow) }) = &self.value else { return None };
@@ -2218,9 +2232,9 @@ impl Definiens {
   }
 
   /// Matches (in identify)
-  pub fn matches<'a>(
-    &self, g: &Global, lc: &LocalContext, kind: ConstrKind, args: &'a [Term],
-  ) -> Option<Subst<'a>> {
+  pub fn matches<'b>(
+    &self, g: &Global, lc: &LocalContext<'a>, kind: ConstrKind, args: &'b [Term<'a>],
+  ) -> Option<Subst<'b>> {
     if self.constr != kind {
       return None
     }
@@ -2232,20 +2246,20 @@ impl Definiens {
   }
 }
 
-impl EqualsDef {
+impl<'a> EqualsDef<'a> {
   /// ExpandTrmIfEqual
   pub fn expand_if_equal(
-    &self, g: &Global, lc: &LocalContext, args: &[Term], depth: u32,
-  ) -> Option<Term> {
+    &self, g: &Global, lc: &LocalContext<'a>, args: &[Term<'a>], depth: u32,
+  ) -> Option<Term<'a>> {
     let mut subst = Subst::from_essential(self.primary.len(), &self.essential, args);
     let true = subst.check_loci_types::<true>(g, lc, &self.primary, false) else { return None };
     Some(subst.inst_term(&g.constrs, lc, &self.expansion, depth))
   }
 }
 
-impl IdentifyFunc {
+impl<'a> IdentifyFunc<'a> {
   pub fn try_apply_lhs(
-    &self, g: &Global, lc: &LocalContext, lhs: &Term, tm: &Term,
+    &self, g: &Global, lc: &LocalContext<'a>, lhs: &Term<'a>, tm: &Term<'a>,
   ) -> Option<Subst<'static>> {
     let mut subst = Subst::new(self.primary.len());
     subst.eq(g, lc, lhs, tm).then_some(())?;
@@ -2260,11 +2274,11 @@ impl IdentifyFunc {
     Some(subst)
   }
 }
-pub struct ExpandPrivFunc<'a>(pub &'a Constructors, pub &'a LocalContext);
+pub struct ExpandPrivFunc<'a>(pub &'a Constructors, pub &'a LocalContext<'a>);
 
 impl VisitMut for ExpandPrivFunc<'_> {
   /// CopyExpTrm
-  fn visit_term(&mut self, tm: &mut Term) {
+  fn visit_term(&mut self, tm: &mut Term<'_>) {
     if let Term::PrivFunc { value, .. } = tm {
       *tm = std::mem::take(value);
       self.visit_term(tm)
@@ -2311,8 +2325,8 @@ impl VisitMut for ExpandPrivFunc<'_> {
   }
 }
 
-impl Term {
-  fn try_to_number(&self, g: &Global, lc: &LocalContext) -> Option<Complex> {
+impl<'a> Term<'a> {
+  fn try_to_number(&self, g: &Global, lc: &LocalContext<'a>) -> Option<Complex> {
     match *self {
       Term::Numeral(n) => Some(n.into()),
       Term::Functor { nr, ref args } => {
@@ -2356,9 +2370,9 @@ impl Term {
 
 pub struct InternConst<'a> {
   g: &'a Global,
-  lc: &'a LocalContext,
-  equals: &'a BTreeMap<ConstrKind, Vec<EqualsDef>>,
-  identify: &'a [IdentifyFunc],
+  lc: &'a LocalContext<'a>,
+  equals: &'a BTreeMap<ConstrKind, Vec<EqualsDef<'a>>>,
+  identify: &'a [IdentifyFunc<'a>],
   func_ids: &'a BTreeMap<ConstrKind, Vec<usize>>,
   only_constants: bool,
   equals_expansion_level: u32,
@@ -2369,8 +2383,8 @@ pub struct InternConst<'a> {
 
 impl<'a> InternConst<'a> {
   pub fn new(
-    g: &'a Global, lc: &'a LocalContext, equals: &'a BTreeMap<ConstrKind, Vec<EqualsDef>>,
-    identify: &'a [IdentifyFunc], func_ids: &'a BTreeMap<ConstrKind, Vec<usize>>,
+    g: &'a Global, lc: &'a LocalContext<'a>, equals: &'a BTreeMap<ConstrKind, Vec<EqualsDef<'a>>>,
+    identify: &'a [IdentifyFunc<'a>], func_ids: &'a BTreeMap<ConstrKind, Vec<usize>>,
   ) -> Self {
     Self {
       g,
@@ -2559,24 +2573,24 @@ impl VisitMut for InternConst<'_> {
   fn visit_push_locus_tys(&mut self, _: &mut [Type]) {}
 }
 
-pub struct ExpandConsts<'a> {
+pub struct ExpandConsts<'a, 'b> {
   ctx: &'a Constructors,
-  lc: &'a LocalContext,
-  ic: &'a IdxVec<InferId, Assignment>,
+  lc: &'a LocalContext<'b>,
+  ic: &'a IdxVec<InferId, Assignment<'b>>,
   depth: u32,
 }
-impl LocalContext {
-  pub fn expand_consts(&self, ctx: &Constructors, f: impl FnOnce(&mut ExpandConsts<'_>)) {
+impl<'b> LocalContext<'b> {
+  pub fn expand_consts(&self, ctx: &Constructors, f: impl FnOnce(&mut ExpandConsts<'_, 'b>)) {
     f(&mut ExpandConsts { ctx, lc: self, ic: &self.infer_const.borrow().vec, depth: 0 })
   }
 }
 
-impl VisitMut for ExpandConsts<'_> {
-  fn push_bound(&mut self, _: IdentId, _: &mut Type) { self.depth += 1 }
+impl VisitMut for ExpandConsts<'_, '_> {
+  fn push_bound(&mut self, _: IdentId, _: &mut Type<'_>) { self.depth += 1 }
   fn pop_bound(&mut self, n: u32) { self.depth -= n }
 
   /// ExpandInferConsts
-  fn visit_term(&mut self, tm: &mut Term) {
+  fn visit_term(&mut self, tm: &mut Term<'_>) {
     if let Term::Infer(nr) = *tm {
       *tm = self.ic[nr].def.visit_cloned(&mut OnVarMut(|v| *v += self.depth));
     }
@@ -2591,16 +2605,16 @@ impl VisitMut for ExpandConsts<'_> {
 }
 
 #[derive(Debug)]
-pub struct Descope {
+pub struct Descope<'a> {
   num_consts: u32,
   infer_const: u32,
   pub remap: HashMap<InferId, InferId>,
   // The entries in remap are Assignment::default() (which is invalid)
-  old: Vec<Assignment>,
+  old: Vec<Assignment<'a>>,
 }
 
-impl VisitMut for Descope {
-  fn visit_term(&mut self, tm: &mut Term) {
+impl VisitMut for Descope<'_> {
+  fn visit_term(&mut self, tm: &mut Term<'_>) {
     loop {
       match *tm {
         Term::Const(c) => assert!(c.0 < self.num_consts, "nongeneralizable variable"),
@@ -2621,24 +2635,24 @@ impl VisitMut for Descope {
 }
 
 #[derive(Debug, Clone)]
-pub struct FixedVar {
+pub struct FixedVar<'a> {
   pub id: IdentId,
-  pub ty: Type,
+  pub ty: Type<'a>,
   /// if true, it will unfold eagerly
-  pub def: Option<(Box<Term>, bool)>,
+  pub def: Option<(Box<Term<'a>>, bool)>,
 }
 
 #[derive(Default, Debug)]
-pub struct Assignment {
+pub struct Assignment<'a> {
   /// Must be Term::Functor
-  pub def: Term,
-  pub ty: Type,
+  pub def: Term<'a>,
+  pub ty: Type<'a>,
   pub number: Option<Complex>,
   pub eq_const: Vec<InferId>,
   // numeric_value: Option<Complex>,
 }
 
-impl Assignment {
+impl<'a> Assignment<'a> {
   pub fn insert_eq_const(&mut self, n: InferId) {
     if !self.eq_const.contains(&n) {
       self.eq_const.push(n)
@@ -2646,7 +2660,7 @@ impl Assignment {
   }
 }
 
-impl<V: VisitMut> Visitable<V> for Assignment {
+impl<'a, V: VisitMut> Visitable<V> for Assignment<'a> {
   fn visit(&mut self, v: &mut V) {
     self.def.visit(v);
     self.ty.visit(v);
@@ -2654,10 +2668,10 @@ impl<V: VisitMut> Visitable<V> for Assignment {
 }
 
 #[derive(Debug, Default)]
-pub struct FuncDef {
-  pub primary: Box<[Type]>,
-  pub ty: Box<Type>,
-  pub value: Box<Term>,
+pub struct FuncDef<'a> {
+  pub primary: Box<[Type<'a>]>,
+  pub ty: Box<Type<'a>>,
+  pub value: Box<Term<'a>>,
 }
 
 #[derive(Debug)]
@@ -2665,44 +2679,44 @@ pub struct Global {
   pub cfg: Config,
   pub reqs: RequirementIndexes,
   pub constrs: Constructors,
-  pub clusters: Clusters,
+  pub clusters: Clusters<'static>,
   /// This is the type that nonzero numerals have.
   /// It is `set` until the NUMERALS requirement is read,
   /// and then it changes to `Element of omega`
-  pub numeral_type: Type,
+  pub numeral_type: Type<'static>,
 }
 
 #[derive(Default)]
-pub struct LocalContext {
+pub struct LocalContext<'a> {
   // here for easy printing
   pub formatter: Formatter,
   /// LocArgTyp
   // FIXME: this is non-owning in mizar
-  pub locus_ty: IdxVec<LocusId, Type>,
+  pub locus_ty: IdxVec<LocusId, Type<'a>>,
   /// BoundVarNbr, BoundVar
-  pub bound_var: IdxVec<BoundId, (IdentId, Type)>,
+  pub bound_var: IdxVec<BoundId, (IdentId, Type<'a>)>,
   /// FixedVar
-  pub fixed_var: IdxVec<ConstId, FixedVar>,
+  pub fixed_var: IdxVec<ConstId, FixedVar<'a>>,
   /// InferConstDef
   /// sorted by Assignment::def (by CmpStyle::Strict)
-  pub infer_const: RefCell<SortedIdxVec<InferId, Assignment>>,
-  pub sch_func_ty: IdxVec<SchFuncId, Type>,
+  pub infer_const: RefCell<SortedIdxVec<InferId, Assignment<'a>>>,
+  pub sch_func_ty: IdxVec<SchFuncId, Type<'a>>,
   /// LocFuncDef
-  pub priv_func: IdxVec<PrivFuncId, FuncDef>,
+  pub priv_func: IdxVec<PrivFuncId, FuncDef<'a>>,
   /// gTermCollection
-  pub term_cache: RefCell<TermCollection>,
+  pub term_cache: RefCell<TermCollection<'a>>,
   /// ItTyp
-  pub it_type: Option<Box<Type>>,
+  pub it_type: Option<Box<Type<'a>>>,
   /// Not in mizar, used in equalizer for TrmInfo marks
-  pub marks: IdxVec<EqMarkId, (Term, EqTermId)>,
+  pub marks: IdxVec<EqMarkId, (Term<'a>, EqTermId)>,
   pub attr_sort_bug: bool,
 }
 
-impl LocalContext {
+impl<'a> LocalContext<'a> {
   /// gTermCollection.FreeAll
   pub fn clear_term_cache(&self) { self.term_cache.borrow_mut().clear() }
 
-  pub fn load_locus_tys(&mut self, tys: &[Type]) {
+  pub fn load_locus_tys(&mut self, tys: &[Type<'a>]) {
     self.term_cache.get_mut().open_scope();
     self.locus_ty.0.extend_from_slice(tys)
   }
@@ -2713,7 +2727,7 @@ impl LocalContext {
     self.term_cache.get_mut().close_scope()
   }
 
-  pub fn with_locus_tys<R>(&mut self, tys: &[Type], f: impl FnOnce(&mut Self) -> R) -> R {
+  pub fn with_locus_tys<R>(&mut self, tys: &[Type<'a>], f: impl FnOnce(&mut Self) -> R) -> R {
     self.load_locus_tys(tys);
     let r = f(self);
     self.unload_locus_tys();
@@ -2808,7 +2822,7 @@ impl LocalContext {
     descope
   }
 
-  pub fn mk_forall<'a>(&mut self, range: Range<usize>, istart: u32, pop: bool, f: &mut Formula<'a>, bump: &'a bumpalo::Bump) {
+  pub fn mk_forall(&mut self, range: Range<usize>, istart: u32, pop: bool, f: &mut Formula<'a>, bump: &'a bumpalo::Bump) {
     // vprintln!("mk_forall {range:?} (pop = {pop}) <- {f:?}");
     if pop {
       self.fixed_var.0.truncate(range.end);
@@ -2839,18 +2853,18 @@ impl LocalContext {
 }
 
 #[derive(Debug)]
-struct Abstract<'a> {
+struct Abstract<'a, 'b> {
   base: u32,
   lift: u32,
-  ic: &'a IdxVec<InferId, Assignment>,
+  ic: &'a IdxVec<InferId, Assignment<'b>>,
   istart: u32,
   depth: u32,
 }
 
-impl VisitMut for Abstract<'_> {
-  fn push_bound(&mut self, _: IdentId, _: &mut Type) { self.depth += 1 }
+impl VisitMut for Abstract<'_, '_> {
+  fn push_bound(&mut self, _: IdentId, _: &mut Type<'_>) { self.depth += 1 }
   fn pop_bound(&mut self, n: u32) { self.depth -= n }
-  fn visit_term(&mut self, tm: &mut Term) {
+  fn visit_term(&mut self, tm: &mut Term<'_>) {
     match tm {
       Term::Bound(nr) => nr.0 += self.lift,
       Term::Const(nr) if nr.0 >= self.base => {
@@ -2936,7 +2950,7 @@ impl RequirementIndexes {
   }
 }
 
-impl Clusters {
+impl<'a> Clusters<'a> {
   pub fn dump(&self) {
     self.registered.iter().for_each(|cl| eprintln!("{cl:?}"));
     self.functor.vec.0.iter().for_each(|cl| eprintln!("{cl:?}"));
