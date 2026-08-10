@@ -973,7 +973,7 @@ impl MizWriter {
             self.depth,
             &bump,
           ),
-        )
+        );
       }
 
       Formula::LegacyFlexAnd { orig, terms, expansion } => self.with0("FlexFrm", |w| {

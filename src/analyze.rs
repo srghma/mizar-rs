@@ -2985,7 +2985,7 @@ trait ReadProof<'a> {
         let mut iter = self.new_cases(elab);
         let f = Formula::mk_and_with(|disjs| {
           for bl in blocks {
-            elab.write_xml.on(|w| w.start_case(&elab.r.lc, CK, it.pos, elab.thesis.as_ref()));
+            elab.write_xml.on(|w| w.start_case(&elab.r.lc, CK, it.pos, elab.thesis.as_deref()));
             let (case, o) = elab.scope(false, true, false, |elab| {
               let case = Formula::mk_and_with(|conjs| {
                 for prop in bl.hyp.conds() {
@@ -3020,7 +3020,7 @@ trait ReadProof<'a> {
         let mut recv = self.new_supposes(elab);
         let f = Formula::mk_and_with(|disjs| {
           for bl in blocks {
-            elab.write_xml.on(|w| w.start_case(&elab.r.lc, CK, it.pos, elab.thesis.as_ref()));
+            elab.write_xml.on(|w| w.start_case(&elab.r.lc, CK, it.pos, elab.thesis.as_deref()));
             let (case, o) = elab.scope(false, true, false, |elab| {
               let case = Formula::mk_and_with(|conjs| {
                 for prop in bl.hyp.conds() {
@@ -3275,7 +3275,7 @@ impl<'a> ReadProof<'a> for WithThesis {
     elab.forall_telescope(start, false, false, &mut thesis, eref);
     let f = thesis.1.maybe_neg(thesis.0);
     elab.write_xml.on(|w| w.write_thesis(&elab.r.lc, &f, &expansions));
-    elab.thesis = Some(f);
+    elab.thesis = Some(Box::new(f));
   }
 
   fn assume(&mut self, elab: &mut Analyzer<'a>, conjs: Vec<Formula<'a>>, log: bool) {
@@ -3323,15 +3323,15 @@ impl<'a> ReadProof<'a> for WithThesis {
       let fail = || panic!("thesis is not the specified definition");
       let mut args_buf;
       let (kind, args) = loop {
-        match f.1 {
-          Formula::Neg { f: f2 } => f = (!f.0, bumpalo::boxed::Box::into_inner(f2)),
-          Formula::PrivPred { value, .. } => f.1 = bumpalo::boxed::Box::into_inner(value),
+        match &mut f.1 {
+          Formula::Neg { f: f2 } => f = (!f.0, bumpalo::boxed::Box::into_inner(std::mem::take(f2))),
+          Formula::PrivPred { value, .. } => f.1 = bumpalo::boxed::Box::into_inner(std::mem::take(value)),
           Formula::Pred { nr, args } => {
-            let (n, args) = Formula::adjust_pred(nr, &args, Some(&elab.g.constrs));
+            let (n, args) = Formula::adjust_pred(*nr, args, Some(&elab.g.constrs));
             break (ConstrKind::Pred(n), args)
           }
           Formula::Attr { nr, args } => {
-            let (n, args) = Formula::adjust_attr(nr, &args, Some(&elab.g.constrs));
+            let (n, args) = Formula::adjust_attr(*nr, args, Some(&elab.g.constrs));
             break (ConstrKind::Attr(n), args)
           }
           Formula::Is { term, ty } => {
@@ -3341,7 +3341,7 @@ impl<'a> ReadProof<'a> for WithThesis {
             }
             let (n, args) = Type::adjust(n, &ty.args, &elab.g.constrs);
             args_buf = args.to_vec();
-            args_buf.push((*term).clone());
+            args_buf.push((**term).clone());
             break (ConstrKind::Mode(n), &*args_buf)
           }
           _ => fail(),
@@ -3383,7 +3383,7 @@ impl<'a> ReadProof<'a> for WithThesis {
     };
     let f = Formula::mk_and(args);
     elab.write_xml.on(|w| w.write_thesis(&elab.r.lc, &f, &Default::default()));
-    elab.thesis = Some(f);
+    elab.thesis = Some(Box::new(f));
   }
 
   fn end_cases(
@@ -3395,7 +3395,7 @@ impl<'a> ReadProof<'a> for WithThesis {
 
   fn new_supposes(&mut self, elab: &mut Analyzer) -> Self::SupposeRecv {
     elab.write_xml.on(|w| {
-      let f = elab.thesis.as_ref().unwrap();
+      let f = elab.thesis.as_deref().unwrap();
       w.write_block_thesis(&elab.r.lc, std::iter::empty(), f)
     });
     Default::default()
@@ -3403,13 +3403,13 @@ impl<'a> ReadProof<'a> for WithThesis {
 
   fn new_suppose(&mut self, elab: &mut Analyzer, _: &mut Self::SupposeRecv, _: &[Formula]) {
     elab.write_xml.on(|w| {
-      let f = elab.thesis.as_ref().unwrap();
+      let f = elab.thesis.as_deref().unwrap();
       w.write_thesis(&elab.r.lc, f, &Default::default())
     });
   }
 
   fn end_supposes(&mut self, elab: &mut Analyzer, expansions: Self::SupposeRecv, end: Position) {
-    let thesis = elab.thesis.as_mut().unwrap();
+    let thesis = elab.thesis.as_deref_mut().unwrap();
     *thesis = Formula::True;
     elab.write_xml.on(|w| {
       w.write_thesis(&elab.r.lc, thesis, &expansions);
@@ -3418,7 +3418,7 @@ impl<'a> ReadProof<'a> for WithThesis {
   }
 
   fn end_block(&mut self, elab: &mut Analyzer, end: Position) {
-    let f = elab.thesis.as_ref().unwrap();
+    let f = elab.thesis.as_deref().unwrap();
     if !matches!(f, Formula::True) {
       eprintln!(
         "error at {}:{end:?}: block incomplete; thesis at end of block:\n  {f:?}",
