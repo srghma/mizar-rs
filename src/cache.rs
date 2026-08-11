@@ -4,26 +4,29 @@ use crate::MizPath;
 use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 
-struct CacheMap {
-  articles: HashMap<Article, Cache>,
+struct CacheMap<'a> {
+  articles: HashMap<Article, Cache<'a>>,
   reqs: HashMap<Article, OnceCell<DepRequirements>>,
 }
 
-static CACHE: OnceCell<CacheMap> = OnceCell::new();
+unsafe impl<'a> Send for CacheMap<'a> {}
+unsafe impl<'a> Sync for CacheMap<'a> {}
+
+static CACHE: OnceCell<CacheMap<'static>> = OnceCell::new();
 
 #[derive(Default)]
-pub struct Cache {
+pub struct Cache<'a> {
   pub wait: bool,
   pub dfr: OnceCell<(Vocabularies, Vec<Format>)>,
-  pub dno: OnceCell<DepNotation>,
+  pub dno: OnceCell<DepNotation<'a>>,
   pub dco: OnceCell<DepConstructors>,
-  pub dcl: OnceCell<DepClusters>,
-  pub def: OnceCell<(Vec<Article>, Vec<Definiens>)>,
-  pub dpr: OnceCell<(Vec<Article>, Vec<Property>)>,
-  pub did: OnceCell<(Vec<Article>, Vec<IdentifyFunc>)>,
-  pub drd: OnceCell<(Vec<Article>, Vec<Reduction>)>,
-  pub the: OnceCell<DepTheorems>,
-  pub sch: OnceCell<DepSchemes>,
+  pub dcl: OnceCell<DepClusters<'a>>,
+  pub def: OnceCell<(Vec<Article>, Vec<Definiens<'a>>)>,
+  pub dpr: OnceCell<(Vec<Article>, Vec<Property<'a>>)>,
+  pub did: OnceCell<(Vec<Article>, Vec<IdentifyFunc<'a>>)>,
+  pub drd: OnceCell<(Vec<Article>, Vec<Reduction<'a>>)>,
+  pub the: OnceCell<DepTheorems<'a>>,
+  pub sch: OnceCell<DepSchemes<'a>>,
 }
 
 #[allow(clippy::unwrap_used)]
@@ -44,14 +47,14 @@ pub fn init_cache<'a>(articles: impl Iterator<Item = (&'a str, bool)>) {
 }
 
 impl MizPath {
-  pub fn with_cache<T>(&self, get: impl FnOnce(&Cache) -> &OnceCell<T>, value: T) {
+  pub fn with_cache<'b, T>(&self, get: impl FnOnce(&'b Cache<'static>) -> &'b OnceCell<T>, value: T) {
     if let Some(c) = CACHE.get().and_then(|map| map.articles.get(&self.art)) {
       get(c).get_or_init(|| value);
     }
   }
 
-  fn get_cache<A, T, R, E>(
-    &self, no: bool, args: &mut A, get: impl FnOnce(&Cache) -> &OnceCell<T>,
+  fn get_cache<'b, A, T, R, E>(
+    &self, no: bool, args: &mut A, get: impl FnOnce(&'b Cache<'static>) -> &'b OnceCell<T>,
     read: impl FnOnce(&mut A, bool) -> Result<R, E>, take: impl FnOnce(&mut A, R) -> T,
     copy: impl FnOnce(&mut A, &T) -> Result<R, E>,
   ) -> Result<R, E> {
@@ -68,8 +71,8 @@ impl MizPath {
     read(args, false)
   }
 
-  fn get_cache_basic<A: Default + Clone, R, E>(
-    &self, no: bool, args: &mut A, get: impl FnOnce(&Cache) -> &OnceCell<A>,
+  fn get_cache_basic<'b, A: Default + Clone, R, E>(
+    &self, no: bool, args: &mut A, get: impl FnOnce(&'b Cache<'static>) -> &'b OnceCell<A>,
     read: impl FnOnce(&mut A) -> Result<R, E>, result: impl FnOnce(&A) -> Result<R, E>,
   ) -> Result<R, E> {
     self.get_cache(

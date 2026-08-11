@@ -127,7 +127,7 @@ impl Formatter {
   }
 }
 
-impl Formula {
+impl<'a> Formula<'a> {
   fn is_positive(&self, pos: bool) -> bool {
     match self {
       Formula::Neg { f } => f.is_positive(!pos),
@@ -140,13 +140,13 @@ impl Formula {
 }
 
 thread_local! {
-  static LOCAL_CONTEXT: Cell<*const LocalContext> = const { Cell::new(std::ptr::null()) };
+  static LOCAL_CONTEXT: Cell<*const LocalContext<'static>> = const { Cell::new(std::ptr::null()) };
 }
 
-impl LocalContext {
-  // pub fn pp<'a, T>(&'a self, t: &'a T) -> Print<'a, T> { Print(Some(self), t) }
+impl<'a> LocalContext<'a> {
+  // pub fn pp<'b, T>(&'b self, t: &'b T) -> Print<'b, T> { Print(Some(self), t) }
 
-  pub fn start_stash(&self) -> *const Self { LOCAL_CONTEXT.with(|lc| lc.replace(self)) }
+  pub fn start_stash(&self) -> *const Self { LOCAL_CONTEXT.with(|lc| lc.replace(unsafe { std::mem::transmute(self) })) }
   pub fn end_stash(old: *const Self) { LOCAL_CONTEXT.with(|lc| lc.set(old)); }
 
   pub fn stash<R>(&self, f: impl FnOnce() -> R) -> R {
@@ -157,7 +157,7 @@ impl LocalContext {
   }
 
   pub fn with<R>(f: impl FnOnce(Option<&Self>) -> R) -> R {
-    LOCAL_CONTEXT.with(|lc| f(unsafe { lc.get().as_ref() }))
+    LOCAL_CONTEXT.with(|lc| f(unsafe { std::mem::transmute(lc.get().as_ref()) }))
   }
 }
 
@@ -171,34 +171,34 @@ impl std::fmt::Display for VarDisplay<'_> {
   }
 }
 
-struct Pretty<'a> {
-  lc: Option<&'a LocalContext>,
+struct Pretty<'a, 'b> {
+  lc: Option<&'a LocalContext<'b>>,
   cfg: &'a FormatterConfig,
   arena: &'a Arena<'a>,
   comma: Doc<'a>,
 }
 
-impl Pretty<'_> {
-  fn with_lc<R>(lc: Option<&LocalContext>, f: impl for<'b> FnOnce(&'b Pretty<'b>) -> R) -> R {
+impl<'a, 'b> Pretty<'a, 'b> {
+  fn with_lc<R>(lc: Option<&'a LocalContext<'b>>, f: impl FnOnce(&Pretty<'a, 'b>) -> R) -> R {
     let arena = Arena::new();
     let cfg = lc.map_or(&FormatterConfig::DEFAULT, |lc| &lc.formatter.cfg);
     let lc = lc.filter(|_| cfg.enable_formatter);
     f(&Pretty { lc, cfg, arena: &arena, comma: arena.text(",").append(arena.line()) })
   }
 
-  fn with<R>(f: impl for<'b> FnOnce(&'b Pretty<'b>) -> R) -> R {
+  fn with<R>(f: impl FnOnce(&Pretty<'a, 'b>) -> R) -> R {
     LocalContext::with(|lc| Self::with_lc(lc, f))
   }
 }
 
-impl<'a> std::ops::Deref for Pretty<'a> {
+impl<'a, 'b> std::ops::Deref for Pretty<'a, 'b> {
   type Target = &'a Arena<'a>;
   fn deref(&self) -> &Self::Target { &self.arena }
 }
 
 type Doc<'a> = DocBuilder<'a, Arena<'a>>;
 
-impl<'a> Pretty<'a> {
+impl<'a, 'b> Pretty<'a, 'b> {
   fn depth(&self) -> u32 { self.lc.map_or(0, |lc| lc.bound_var.len() as u32) }
 
   fn bound(&self, mut id: IdentId, vars: &[IdentId], depth: u32) -> VarDisplay<'_> {
@@ -726,15 +726,33 @@ macro_rules! impl_env_debug {
   };
 }
 
-impl_env_debug! {
+macro_rules! impl_env_debug_lt {
+  ($($ty:ident: |$self:ident, $p:ident| $e:expr;)*) => {
+    $(
+      impl<'a> EnvDebug for $ty<'a> {
+        fn pp_fmt<'b>(&$self, $p: &Pretty<'b>) -> Doc<'b> { $e }
+      }
+      impl<'a> std::fmt::Debug for $ty<'a> {
+        fn fmt(&$self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+          Pretty::with(|$p| $e.nest(2).render_fmt(100, f))
+        }
+      }
+    )*
+  };
+}
+
+impl_env_debug_lt! {
   Term: |self, p| p.term(false, self, &mut vec![], p.depth(), 0);
   Formula: |self, p| p.formula(false, true, self, &mut vec![], p.depth(), 0);
-  Attr: |self, p| p.attr(self, false, &mut vec![], p.depth(), 0);
-  Attrs: |self, p| p.attrs(self, false, &mut vec![], p.depth(), 0);
   Type: |self, p| p.ty(self, &mut vec![], p.depth(), 0);
 }
 
-pub struct Display<'a, T>(Option<&'a LocalContext>, &'a T);
+impl_env_debug_lt! {
+  Attr: |self, p| p.attr(self, false, &mut vec![], p.depth(), 0);
+  Attrs: |self, p| p.attrs(self, false, &mut vec![], p.depth(), 0);
+}
+
+pub struct Display<'a, T>(Option<&'a LocalContext<'a>>, &'a T);
 
 impl<T: EnvDebug> std::fmt::Display for Display<'_, T> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -742,6 +760,6 @@ impl<T: EnvDebug> std::fmt::Display for Display<'_, T> {
   }
 }
 
-impl LocalContext {
-  pub fn pp<'a, T>(&'a self, t: &'a T) -> Display<'a, T> { Display(Some(self), t) }
+impl<'a> LocalContext<'a> {
+  pub fn pp<'b, T>(&'b self, t: &'b T) -> Display<'b, T> { Display(Some(self), t) }
 }

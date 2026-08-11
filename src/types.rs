@@ -753,7 +753,7 @@ pub struct Type<'a> {
   pub kind: TypeKind,
   /// The first is the attributes written by the user ("lower cluster"),
   /// the second is the attributes calculated by the system ("upper cluster")
-  pub attrs: (Attrs, Attrs),
+  pub attrs: (Attrs<'a>, Attrs<'a>),
   /// The mode arguments (ModArgs)
   pub args: Vec<Term<'a>>,
 }
@@ -1048,41 +1048,41 @@ impl<'a> Formula<'a> {
 
 
 #[derive(Clone, PartialEq, Eq)]
-pub enum Attrs {
+pub enum Attrs<'a> {
   Inconsistent,
-  Consistent(Vec<Attr>),
+  Consistent(Vec<Attr<'a>>),
 }
 
-impl Attrs {
-  pub const EMPTY: Attrs = Self::Consistent(vec![]);
+impl<'a> Attrs<'a> {
+  pub const EMPTY: Attrs<'static> = Attrs::Consistent(Vec::new());
 
-  pub fn attrs(&self) -> &[Attr] {
+  pub fn attrs(&self) -> &[Attr<'a>] {
     match self {
       Attrs::Inconsistent => &[],
       Attrs::Consistent(attrs) => attrs,
     }
   }
 }
-impl Default for Attrs {
+impl<'a> Default for Attrs<'a> {
   fn default() -> Self { Self::EMPTY }
 }
 
-impl<V: VisitMut> Visitable<V> for Attrs {
+impl<'a, V: VisitMut> Visitable<V> for Attrs<'a> {
   fn visit(&mut self, v: &mut V) { v.visit_attrs(self) }
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct Attr {
+pub struct Attr<'a> {
   pub nr: AttrId,
   pub pos: bool,
-  pub args: Box<[Term]>,
+  pub args: Box<[Term<'a>]>,
 }
 
-impl Attr {
+impl<'a> Attr<'a> {
   pub fn new0(nr: AttrId, pos: bool) -> Self { Self { nr, pos, args: Box::new([]) } }
 }
 
-impl<V: VisitMut> Visitable<V> for Attr {
+impl<'a, V: VisitMut> Visitable<V> for Attr<'a> {
   fn visit(&mut self, v: &mut V) { self.args.visit(v) }
 }
 
@@ -1309,38 +1309,38 @@ impl Properties {
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
-pub struct Constructor<I> {
+pub struct Constructor<'a, I> {
   // pub article: Article,
   // /// number of constructor in article
   // pub abs_nr: u32,
-  pub primary: Box<[Type]>,
+  pub primary: Box<[Type<'a>]>,
   pub redefines: Option<I>,
   pub superfluous: u8,
   pub properties: Properties,
 }
 
-impl<I> Constructor<I> {
-  pub const fn new(primary: Box<[Type]>) -> Self {
+impl<'a, I> Constructor<'a, I> {
+  pub const fn new(primary: Box<[Type<'a>]>) -> Self {
     Self { primary, redefines: None, superfluous: 0, properties: Properties::EMPTY }
   }
 }
-impl<V: VisitMut, I: Visitable<V>> Visitable<V> for Constructor<I> {
+impl<'a, V: VisitMut, I: Visitable<V>> Visitable<V> for Constructor<'a, I> {
   fn visit(&mut self, v: &mut V) {
     v.with_locus_tys(&mut self.primary, |v| self.redefines.visit(v))
   }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TyConstructor<I> {
-  pub c: Constructor<I>,
-  pub ty: Type,
+pub struct TyConstructor<'a, I> {
+  pub c: Constructor<'a, I>,
+  pub ty: Type<'a>,
 }
 
-impl<I> std::ops::Deref for TyConstructor<I> {
-  type Target = Constructor<I>;
+impl<'a, I> std::ops::Deref for TyConstructor<'a, I> {
+  type Target = Constructor<'a, I>;
   fn deref(&self) -> &Self::Target { &self.c }
 }
-impl<V: VisitMut, I: Visitable<V>> Visitable<V> for TyConstructor<I> {
+impl<'a, V: VisitMut, I: Visitable<V>> Visitable<V> for TyConstructor<'a, I> {
   fn visit(&mut self, v: &mut V) {
     v.with_locus_tys(&mut self.c.primary, |v| {
       self.c.redefines.visit(v);
@@ -1350,20 +1350,20 @@ impl<V: VisitMut, I: Visitable<V>> Visitable<V> for TyConstructor<I> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StructMode {
-  pub c: Constructor<StructId>,
+pub struct StructMode<'a> {
+  pub c: Constructor<'a, StructId>,
   /// These are guaranteed to be struct types
-  pub parents: Box<[Type]>,
+  pub parents: Box<[Type<'a>]>,
   pub aggr: AggrId,
   /// sorted by id
   pub fields: Box<[SelId]>,
 }
 
-impl std::ops::Deref for StructMode {
-  type Target = Constructor<StructId>;
+impl<'a> std::ops::Deref for StructMode<'a> {
+  type Target = Constructor<'a, StructId>;
   fn deref(&self) -> &Self::Target { &self.c }
 }
-impl<V: VisitMut> Visitable<V> for StructMode {
+impl<'a, V: VisitMut> Visitable<V> for StructMode<'a> {
   fn visit(&mut self, v: &mut V) {
     v.with_locus_tys(&mut self.c.primary, |v| {
       self.c.redefines.visit(v);
@@ -1378,24 +1378,24 @@ impl<V: VisitMut> Visitable<V> for StructMode {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Aggregate {
-  pub c: TyConstructor<AggrId>,
+pub struct Aggregate<'a> {
+  pub c: TyConstructor<'a, AggrId>,
   pub base: u8,
   /// ordered the same as the constructor arguments
   pub fields: Box<[SelId]>,
 }
-impl<V: VisitMut> Visitable<V> for Aggregate {
+impl<'a, V: VisitMut> Visitable<V> for Aggregate<'a> {
   fn visit(&mut self, v: &mut V) {
     self.c.visit(v);
     self.fields.visit(v);
   }
 }
 
-impl std::ops::Deref for Aggregate {
-  type Target = TyConstructor<AggrId>;
+impl<'a> std::ops::Deref for Aggregate<'a> {
+  type Target = TyConstructor<'a, AggrId>;
   fn deref(&self) -> &Self::Target { &self.c }
 }
-impl std::ops::DerefMut for Aggregate {
+impl<'a> std::ops::DerefMut for Aggregate<'a> {
   fn deref_mut(&mut self) -> &mut Self::Target { &mut self.c }
 }
 
@@ -1500,25 +1500,25 @@ macro_rules! impl_constructors {
 
 impl_constructors! {
   struct Constructors {
-    Mode(mode): IdxVec<ModeId, TyConstructor<ModeId>> = b'M',
-    Struct(struct_mode): IdxVec<StructId, StructMode> = b'S',
+    Mode(mode): IdxVec<ModeId, TyConstructor<'static, ModeId>> = b'M',
+    Struct(struct_mode): IdxVec<StructId, StructMode<'static>> = b'S',
     /// Invariant: The `ty` field is always equal to `primary.last()`
-    Attr(attribute): IdxVec<AttrId, TyConstructor<AttrId>> = b'V',
-    Pred(predicate): IdxVec<PredId, Constructor<PredId>> = b'R',
-    Func(functor): IdxVec<FuncId, TyConstructor<FuncId>> = b'K',
-    Sel(selector): IdxVec<SelId, TyConstructor<SelId>> = b'U',
-    Aggr(aggregate): IdxVec<AggrId, Aggregate> = b'G',
+    Attr(attribute): IdxVec<AttrId, TyConstructor<'static, AttrId>> = b'V',
+    Pred(predicate): IdxVec<PredId, Constructor<'static, PredId>> = b'R',
+    Func(functor): IdxVec<FuncId, TyConstructor<'static, FuncId>> = b'K',
+    Sel(selector): IdxVec<SelId, TyConstructor<'static, SelId>> = b'U',
+    Aggr(aggregate): IdxVec<AggrId, Aggregate<'static>> = b'G',
   }
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct Clusters {
-  pub registered: Vec<RegisteredCluster>,
+pub struct Clusters<'a> {
+  pub registered: Vec<RegisteredCluster<'a>>,
   /// sorted by |a, b| FunctorCluster::cmp_term(&a.term, ctx, &b.term)
-  pub functor: SortedIdxVec<usize, FunctorCluster>,
-  pub conditional: ConditionalClusters,
+  pub functor: SortedIdxVec<usize, FunctorCluster<'a>>,
+  pub conditional: ConditionalClusters<'a>,
 }
-impl<V: VisitMut> Visitable<V> for Clusters {
+impl<'a, V: VisitMut> Visitable<V> for Clusters<'a> {
   fn visit(&mut self, v: &mut V) {
     self.registered.visit(v);
     self.functor.visit(v);
@@ -1526,7 +1526,7 @@ impl<V: VisitMut> Visitable<V> for Clusters {
   }
 }
 
-impl Clusters {
+impl<'a> Clusters<'a> {
   pub fn len(&self) -> ClustersBase {
     ClustersBase {
       registered: self.registered.len() as u32,
@@ -1535,7 +1535,7 @@ impl Clusters {
     }
   }
 
-  pub fn since(&self, base: &ClustersBase) -> ClustersRef<'_> {
+  pub fn since(&self, base: &ClustersBase) -> ClustersRef<'a> {
     ClustersRef {
       registered: &self.registered[base.registered as usize..],
       functor: &self.functor.0[base.functor as usize..],
@@ -1543,7 +1543,7 @@ impl Clusters {
     }
   }
 
-  pub fn append(&mut self, ctx: &Constructors, other: &mut ClustersRaw) {
+  pub fn append(&mut self, ctx: &Constructors, other: &mut ClustersRaw<'a>) {
     self.registered.append(&mut other.registered);
     self.functor.0.append(&mut other.functor);
     for cc in &other.conditional {
@@ -1562,18 +1562,18 @@ pub struct ClustersBase {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClustersRef<'a> {
-  pub registered: &'a [RegisteredCluster],
-  pub functor: &'a [FunctorCluster],
-  pub conditional: &'a [ConditionalCluster],
+  pub registered: &'a [RegisteredCluster<'a>],
+  pub functor: &'a [FunctorCluster<'a>],
+  pub conditional: &'a [ConditionalCluster<'a>],
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ClustersRaw {
-  pub registered: Vec<RegisteredCluster>,
-  pub functor: Vec<FunctorCluster>,
-  pub conditional: Vec<ConditionalCluster>,
+pub struct ClustersRaw<'a> {
+  pub registered: Vec<RegisteredCluster<'a>>,
+  pub functor: Vec<FunctorCluster<'a>>,
+  pub conditional: Vec<ConditionalCluster<'a>>,
 }
-impl<V: VisitMut> Visitable<V> for ClustersRaw {
+impl<'a, V: VisitMut> Visitable<V> for ClustersRaw<'a> {
   fn visit(&mut self, v: &mut V) {
     self.registered.visit(v);
     self.functor.visit(v);
@@ -1581,12 +1581,12 @@ impl<V: VisitMut> Visitable<V> for ClustersRaw {
   }
 }
 
-impl ClustersRef<'_> {
+impl<'a> ClustersRef<'a> {
   pub fn is_empty(&self) -> bool {
     self.registered.is_empty() && self.functor.is_empty() && self.conditional.is_empty()
   }
 
-  pub fn to_owned(self) -> ClustersRaw {
+  pub fn to_owned(self) -> ClustersRaw<'a> {
     ClustersRaw {
       registered: self.registered.to_owned(),
       functor: self.functor.to_owned(),
@@ -1595,8 +1595,8 @@ impl ClustersRef<'_> {
   }
 }
 
-impl ClustersRaw {
-  pub fn as_ref(&self) -> ClustersRef<'_> {
+impl<'a> ClustersRaw<'a> {
+  pub fn as_ref(&self) -> ClustersRef<'a> {
     ClustersRef {
       registered: &self.registered,
       functor: &self.functor,
@@ -1606,23 +1606,23 @@ impl ClustersRaw {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct Cluster {
+pub struct Cluster<'a> {
   /// nPrimaryList
-  pub primary: Box<[Type]>,
+  pub primary: Box<[Type<'a>]>,
   /// nConsequent.(Lower, Upper)
-  pub consequent: (Attrs, Attrs),
+  pub consequent: (Attrs<'a>, Attrs<'a>),
   // /// nArticle
   // pub article: Article,
   // /// nAbsNr
   // pub abs_nr: u32,
 }
-impl<V: VisitMut> Visitable<V> for Cluster {
+impl<'a, V: VisitMut> Visitable<V> for Cluster<'a> {
   fn visit(&mut self, v: &mut V) {
     v.with_locus_tys(&mut self.primary, |v| v.visit_attr_pair(&mut self.consequent));
   }
 }
 
-impl std::fmt::Debug for Cluster {
+impl<'a> std::fmt::Debug for Cluster<'a> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("Cluster")
       .field("primary", &self.primary)
@@ -1635,19 +1635,19 @@ impl std::fmt::Debug for Cluster {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RegisteredCluster {
-  pub cl: Cluster,
-  pub ty: Box<Type>,
+pub struct RegisteredCluster<'a> {
+  pub cl: Cluster<'a>,
+  pub ty: Box<Type<'a>>,
 }
 
-impl std::ops::Deref for RegisteredCluster {
-  type Target = Cluster;
+impl<'a> std::ops::Deref for RegisteredCluster<'a> {
+  type Target = Cluster<'a>;
   fn deref(&self) -> &Self::Target { &self.cl }
 }
-impl std::ops::DerefMut for RegisteredCluster {
+impl<'a> std::ops::DerefMut for RegisteredCluster<'a> {
   fn deref_mut(&mut self) -> &mut Self::Target { &mut self.cl }
 }
-impl<V: VisitMut> Visitable<V> for RegisteredCluster {
+impl<'a, V: VisitMut> Visitable<V> for RegisteredCluster<'a> {
   fn visit(&mut self, v: &mut V) {
     v.with_locus_tys(&mut self.cl.primary, |v| {
       v.visit_attr_pair(&mut self.cl.consequent);
@@ -1657,19 +1657,19 @@ impl<V: VisitMut> Visitable<V> for RegisteredCluster {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConditionalCluster {
-  pub cl: Cluster,
-  pub ty: Box<Type>,
-  pub antecedent: Attrs,
+pub struct ConditionalCluster<'a> {
+  pub cl: Cluster<'a>,
+  pub ty: Box<Type<'a>>,
+  pub antecedent: Attrs<'a>,
 }
-impl std::ops::Deref for ConditionalCluster {
-  type Target = Cluster;
+impl<'a> std::ops::Deref for ConditionalCluster<'a> {
+  type Target = Cluster<'a>;
   fn deref(&self) -> &Self::Target { &self.cl }
 }
-impl std::ops::DerefMut for ConditionalCluster {
+impl<'a> std::ops::DerefMut for ConditionalCluster<'a> {
   fn deref_mut(&mut self) -> &mut Self::Target { &mut self.cl }
 }
-impl<V: VisitMut> Visitable<V> for ConditionalCluster {
+impl<'a, V: VisitMut> Visitable<V> for ConditionalCluster<'a> {
   fn visit(&mut self, v: &mut V) {
     v.with_locus_tys(&mut self.cl.primary, |v| {
       v.visit_attr_pair(&mut self.cl.consequent);
@@ -1680,20 +1680,20 @@ impl<V: VisitMut> Visitable<V> for ConditionalCluster {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FunctorCluster {
-  pub cl: Cluster,
-  pub ty: Option<Box<Type>>,
-  pub term: Box<Term>,
+pub struct FunctorCluster<'a> {
+  pub cl: Cluster<'a>,
+  pub ty: Option<Box<Type<'a>>>,
+  pub term: Box<Term<'a>>,
 }
 
-impl std::ops::Deref for FunctorCluster {
-  type Target = Cluster;
+impl<'a> std::ops::Deref for FunctorCluster<'a> {
+  type Target = Cluster<'a>;
   fn deref(&self) -> &Self::Target { &self.cl }
 }
-impl std::ops::DerefMut for FunctorCluster {
+impl<'a> std::ops::DerefMut for FunctorCluster<'a> {
   fn deref_mut(&mut self) -> &mut Self::Target { &mut self.cl }
 }
-impl<V: VisitMut> Visitable<V> for FunctorCluster {
+impl<'a, V: VisitMut> Visitable<V> for FunctorCluster<'a> {
   fn visit(&mut self, v: &mut V) {
     v.with_locus_tys(&mut self.cl.primary, |v| {
       v.visit_attr_pair(&mut self.cl.consequent);
@@ -1703,8 +1703,8 @@ impl<V: VisitMut> Visitable<V> for FunctorCluster {
   }
 }
 
-impl FunctorCluster {
-  pub fn cmp_term(this: &Term, ctx: &Constructors, other: &Term) -> std::cmp::Ordering {
+impl<'a> FunctorCluster<'a> {
+  pub fn cmp_term(this: &Term<'a>, ctx: &Constructors, other: &Term<'a>) -> std::cmp::Ordering {
     match (this, other) {
       (&Term::Functor { nr: n1, .. }, &Term::Functor { nr: n2, .. }) => {
         let n1 = ctx.functor[n1].redefines.unwrap_or(n1);
@@ -1719,23 +1719,23 @@ impl FunctorCluster {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ConditionalClusters {
-  pub vec: Vec<ConditionalCluster>,
+pub struct ConditionalClusters<'a> {
+  pub vec: Vec<ConditionalCluster<'a>>,
   pub attr_clusters: EnumMap<bool, BTreeMap<AttrId, BTreeSet<u32>>>,
 }
-impl std::ops::Deref for ConditionalClusters {
-  type Target = [ConditionalCluster];
+impl<'a> std::ops::Deref for ConditionalClusters<'a> {
+  type Target = [ConditionalCluster<'a>];
   fn deref(&self) -> &Self::Target { &self.vec }
 }
-impl std::ops::DerefMut for ConditionalClusters {
+impl<'a> std::ops::DerefMut for ConditionalClusters<'a> {
   fn deref_mut(&mut self) -> &mut Self::Target { &mut self.vec }
 }
-impl<V: VisitMut> Visitable<V> for ConditionalClusters {
+impl<'a, V: VisitMut> Visitable<V> for ConditionalClusters<'a> {
   fn visit(&mut self, v: &mut V) { self.vec.visit(v); }
 }
 
-impl ConditionalClusters {
-  pub fn update_attr_clusters(&mut self, ctx: &Constructors, attrs: &Attrs) {
+impl<'a> ConditionalClusters<'a> {
+  pub fn update_attr_clusters(&mut self, ctx: &Constructors, attrs: &Attrs<'a>) {
     if let Attrs::Consistent(attrs) = attrs {
       for attr in attrs {
         self.attr_clusters[attr.pos]
@@ -1745,20 +1745,20 @@ impl ConditionalClusters {
       }
     }
   }
-  pub fn push(&mut self, ctx: &Constructors, cc: ConditionalCluster) {
+  pub fn push(&mut self, ctx: &Constructors, cc: ConditionalCluster<'a>) {
     self.update_attr_clusters(ctx, &cc.antecedent);
     self.vec.push(cc)
   }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConstrDef {
+pub struct ConstrDef<'a> {
   pub def_nr: DefId,
   pub article: Article,
   pub constr: ConstrKind,
-  pub primary: Box<[Type]>,
+  pub primary: Box<[Type<'a>]>,
 }
-impl<V: VisitMut> Visitable<V> for ConstrDef {
+impl<'a, V: VisitMut> Visitable<V> for ConstrDef<'a> {
   fn visit(&mut self, v: &mut V) {
     self.constr.visit(v);
     v.with_locus_tys(&mut self.primary, |_| {})
@@ -1766,11 +1766,11 @@ impl<V: VisitMut> Visitable<V> for ConstrDef {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DefCase<T> {
+pub struct DefCase<'a, T> {
   pub case: T,
-  pub guard: Formula,
+  pub guard: Formula<'a>,
 }
-impl<V: VisitMut, T: Visitable<V>> Visitable<V> for DefCase<T> {
+impl<'a, V: VisitMut, T: Visitable<V>> Visitable<V> for DefCase<'a, T> {
   fn visit(&mut self, v: &mut V) {
     self.case.visit(v);
     self.guard.visit(v)
@@ -1778,12 +1778,12 @@ impl<V: VisitMut, T: Visitable<V>> Visitable<V> for DefCase<T> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DefBody<T> {
+pub struct DefBody<'a, T> {
   /// nPartialDefinientia
-  pub cases: Box<[DefCase<T>]>,
+  pub cases: Box<[DefCase<'a, T>]>,
   pub otherwise: Option<T>,
 }
-impl<V: VisitMut, T: Visitable<V>> Visitable<V> for DefBody<T> {
+impl<'a, V: VisitMut, T: Visitable<V>> Visitable<V> for DefBody<'a, T> {
   fn visit(&mut self, v: &mut V) {
     self.cases.visit(v);
     self.otherwise.visit(v)
@@ -1792,8 +1792,8 @@ impl<V: VisitMut, T: Visitable<V>> Visitable<V> for DefBody<T> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum DefValue<'a> {
-  Term(DefBody<Term>),
-  Formula(DefBody<Formula<'a>>),
+  Term(DefBody<'a, Term<'a>>),
+  Formula(DefBody<'a, Formula<'a>>),
 }
 impl<'a, V: VisitMut> Visitable<V> for DefValue<'a> {
   fn visit(&mut self, v: &mut V) {
@@ -1825,7 +1825,7 @@ impl<'a> DefValue<'a> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Definiens<'a> {
-  pub c: ConstrDef,
+  pub c: ConstrDef<'a>,
   // pub lab_id: Option<LabelId>,
   pub essential: Box<[LocusId]>,
   pub assumptions: Formula<'a>,
@@ -1845,7 +1845,7 @@ impl<'a> Definiens<'a> {
 
 
 impl<'a> std::ops::Deref for Definiens<'a> {
-  type Target = ConstrDef;
+  type Target = ConstrDef<'a>;
   fn deref(&self) -> &Self::Target { &self.c }
 }
 
@@ -1860,28 +1860,28 @@ impl<'a, V: VisitMut> Visitable<V> for Definiens<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Property {
+pub struct Property<'a> {
   // pub article: Article,
   // pub abs_nr: u32,
-  pub primary: Box<[Type]>,
-  pub ty: Type,
+  pub primary: Box<[Type<'a>]>,
+  pub ty: Type<'a>,
   pub kind: PropertyKind,
 }
-impl<V: VisitMut> Visitable<V> for Property {
+impl<'a, V: VisitMut> Visitable<V> for Property<'a> {
   fn visit(&mut self, v: &mut V) { v.with_locus_tys(&mut self.primary, |v| self.ty.visit(v)) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IdentifyFunc {
+pub struct IdentifyFunc<'a> {
   // pub article: Article,
   // pub abs_nr: u32,
-  pub primary: Box<[Type]>,
+  pub primary: Box<[Type<'a>]>,
   /// lhs must be Term::Functor
-  pub lhs: Term,
-  pub rhs: Term,
+  pub lhs: Term<'a>,
+  pub rhs: Term<'a>,
   pub eq_args: Box<[(LocusId, LocusId)]>,
 }
-impl<V: VisitMut> Visitable<V> for IdentifyFunc {
+impl<'a, V: VisitMut> Visitable<V> for IdentifyFunc<'a> {
   fn visit(&mut self, v: &mut V) {
     v.with_locus_tys(&mut self.primary, |v| {
       self.lhs.visit(v);
@@ -1891,26 +1891,26 @@ impl<V: VisitMut> Visitable<V> for IdentifyFunc {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reduction {
+pub struct Reduction<'a> {
   // pub article: Article,
   // pub abs_nr: u32,
-  pub primary: Box<[Type]>,
-  pub terms: [Term; 2],
+  pub primary: Box<[Type<'a>]>,
+  pub terms: [Term<'a>; 2],
 }
-impl<V: VisitMut> Visitable<V> for Reduction {
+impl<'a, V: VisitMut> Visitable<V> for Reduction<'a> {
   fn visit(&mut self, v: &mut V) {
     v.with_locus_tys(&mut self.primary, |v| self.terms.iter_mut().for_each(|t| t.visit(v)));
   }
 }
 
 #[derive(Debug)]
-pub struct EqualsDef {
-  pub primary: Box<[Type]>,
-  pub expansion: Term,
-  pub pattern: (FuncId, Box<[Term]>),
+pub struct EqualsDef<'a> {
+  pub primary: Box<[Type<'a>]>,
+  pub expansion: Term<'a>,
+  pub pattern: (FuncId, Box<[Term<'a>]>),
   pub essential: Box<[LocusId]>,
 }
-impl<V: VisitMut> Visitable<V> for EqualsDef {
+impl<'a, V: VisitMut> Visitable<V> for EqualsDef<'a> {
   fn visit(&mut self, v: &mut V) {
     v.with_locus_tys(&mut self.primary, |v| {
       self.expansion.visit(v);
@@ -1932,7 +1932,7 @@ pub struct References {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Scheme<'a> {
-  pub sch_funcs: Box<[Type]>,
+  pub sch_funcs: Box<[Type<'a>]>,
   pub prems: Box<[Formula<'a>]>,
   pub thesis: Formula<'a>,
 }
@@ -2116,7 +2116,7 @@ pub struct Definition<'a> {
   pub corr: Option<Correctness<'a>>,
   pub props: Vec<JustifiedProperty<'a>>,
   pub constr: Option<ConstructorDef>,
-  pub patts: Vec<Pattern>,
+  pub patts: Vec<Pattern<'a>>,
 }
 
 #[derive(Debug)]
@@ -2124,7 +2124,7 @@ pub struct DefStruct<'a> {
   pub pos: Position,
   pub constrs: Vec<ConstructorDef>,
   pub cl: ClusterDecl<'a>,
-  pub patts: Vec<Pattern>,
+  pub patts: Vec<Pattern<'a>>,
 }
 
 pub struct Proposition<'a> {
@@ -2198,13 +2198,13 @@ pub enum AuxiliaryItem<'a> {
   },
   /// itPrivFuncDefinition
   DefFunc {
-    args: Box<[Type]>,
-    ty: Type,
-    value: Term,
+    args: Box<[Type<'a>]>,
+    ty: Type<'a>,
+    value: Term<'a>,
   },
   /// itPrivPredDefinition
   DefPred {
-    args: Box<[Type]>,
+    args: Box<[Type<'a>]>,
     value: Formula<'a>,
   },
 }
@@ -2224,9 +2224,9 @@ impl<'a> AuxiliaryItem<'a> {
 #[derive(Debug)]
 pub enum Registration<'a> {
   Cluster(ClusterDecl<'a>),
-  Identify { kind: IdentifyFunc, conds: Vec<CorrCond<'a>>, corr: Option<Correctness<'a>> },
-  Reduction { kind: Reduction, conds: Vec<CorrCond<'a>>, corr: Option<Correctness<'a>> },
-  Property { kind: Property, prop: Proposition<'a>, just: Justification<'a> },
+  Identify { kind: IdentifyFunc<'a>, conds: Vec<CorrCond<'a>>, corr: Option<Correctness<'a>> },
+  Reduction { kind: Reduction<'a>, conds: Vec<CorrCond<'a>>, corr: Option<Correctness<'a>> },
+  Property { kind: Property<'a>, prop: Proposition<'a>, just: Justification<'a> },
 }
 
 #[derive(Copy, Clone, Debug, Enum, PartialEq, Eq, Serialize, Deserialize)]
@@ -2370,7 +2370,7 @@ impl BlockKind {
 #[derive(Debug)]
 pub enum Item<'a> {
   /// itGeneralization
-  Let(Vec<(IdentId, Type)>),
+  Let(Vec<(IdentId, Type<'a>)>),
   /// itExistentialAssumption
   Given(GivenItem<'a>),
   /// itConclusion
@@ -2379,12 +2379,12 @@ pub enum Item<'a> {
   /// invariant: not empty
   Assume(Vec<Proposition<'a>>),
   /// itSimpleExemplification
-  Take(Term),
+  Take(Term<'a>),
   /// itExemplificationWithEquality
   TakeAsVar {
     id: IdentId,
-    ty: Type,
-    tm: Term,
+    ty: Type<'a>,
+    tm: Term<'a>,
   },
   PerCases(PerCases<'a>),
   Auxiliary(AuxiliaryItem<'a>),
@@ -2400,13 +2400,13 @@ pub enum Item<'a> {
   },
   Reservation {
     ids: Vec<u32>,
-    ty: Box<Type>,
+    ty: Box<Type<'a>>,
   },
   Canceled(CancelKind),
   Definition(Definition<'a>),
   DefStruct(DefStruct<'a>),
   Definiens(Definiens<'a>),
-  Pattern(Pattern),
+  Pattern(Pattern<'a>),
   Block {
     kind: BlockKind,
     pos: (Position, Position),
@@ -2734,9 +2734,9 @@ pub enum PatternKindClass {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PatternKind {
+pub enum PatternKind<'a> {
   Mode(ModeId),
-  ExpandableMode { expansion: Box<Type> },
+  ExpandableMode { expansion: Box<Type<'a>> },
   Struct(StructId),
   Attr(AttrId),
   Pred(PredId),
@@ -2745,7 +2745,7 @@ pub enum PatternKind {
   Aggr(AggrId),
   SubAggr(StructId),
 }
-impl<V: VisitMut> Visitable<V> for PatternKind {
+impl<'a, V: VisitMut> Visitable<V> for PatternKind<'a> {
   fn visit(&mut self, v: &mut V) {
     match self {
       Self::Mode(nr) => nr.visit(v),
@@ -2761,7 +2761,7 @@ impl<V: VisitMut> Visitable<V> for PatternKind {
   }
 }
 
-impl PatternKind {
+impl<'a> PatternKind<'a> {
   pub fn class(&self) -> PatternKindClass {
     match self {
       Self::Mode(_) | Self::ExpandableMode { .. } => PatternKindClass::Mode,
@@ -2777,14 +2777,14 @@ impl PatternKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Pattern<F = FormatId> {
-  pub kind: PatternKind,
+pub struct Pattern<'a, F = FormatId> {
+  pub kind: PatternKind<'a>,
   // pub pid: u32,
   pub article: Article,
   pub abs_nr: u32,
   pub fmt: F,
   // pub redefines: Option<u32>,
-  pub primary: Box<[Type]>,
+  pub primary: Box<[Type<'a>]>,
   pub visible: Box<[LocusId]>,
   pub pos: bool,
 }
@@ -2819,10 +2819,10 @@ impl std::ops::Sub<&Self> for SymbolsBase {
 pub struct Vocabularies(pub Vec<(Article, SymbolsBase)>);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct DepNotation {
+pub struct DepNotation<'a> {
   pub sig: Vec<Article>,
   pub vocs: Vocabularies,
-  pub pats: Vec<Pattern<Format>>,
+  pub pats: Vec<Pattern<'a, Format>>,
 }
 
 #[derive(Debug, Default)]
@@ -2840,9 +2840,9 @@ pub struct DepConstructors {
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
-pub struct DepClusters {
+pub struct DepClusters<'a> {
   pub sig: Vec<Article>,
-  pub cl: ClustersRaw,
+  pub cl: ClustersRaw<'a>,
 }
 
 // #[derive(Clone, Default, PartialEq, Eq)]
@@ -2873,12 +2873,12 @@ impl<V: VisitMut> Visitable<V> for TheoremKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Theorem {
+pub struct Theorem<'a> {
   pub pos: Position,
   pub kind: TheoremKind,
-  pub stmt: Formula,
+  pub stmt: Formula<'a>,
 }
-impl<V: VisitMut> Visitable<V> for Theorem {
+impl<'a, V: VisitMut> Visitable<V> for Theorem<'a> {
   fn visit(&mut self, v: &mut V) {
     self.kind.visit(v);
     self.stmt.visit(v)
@@ -2886,15 +2886,15 @@ impl<V: VisitMut> Visitable<V> for Theorem {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct DepTheorems {
+pub struct DepTheorems<'a> {
   pub sig: Vec<Article>,
-  pub thm: Vec<Theorem>,
+  pub thm: Vec<Theorem<'a>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct DepSchemes {
+pub struct DepSchemes<'a> {
   pub sig: Vec<Article>,
-  pub sch: Vec<Option<Scheme>>,
+  pub sch: Vec<Option<Scheme<'a>>>,
 }
 
 #[derive(Clone, Copy, Debug, Enum, PartialEq, Eq)]

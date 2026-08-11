@@ -1268,9 +1268,9 @@ impl UnifyWithConst<'_> {
   }
 }
 
-impl EquateClass<'_> {
+impl<'a> EquateClass<'a> {
   /// EqClassNr
-  fn get(&mut self, g: &Global, lc: &LocalContext, tm: &Term) -> Option<EqClassId> {
+  fn get(&mut self, g: &'a Global, lc: &'a LocalContext<'a>, tm: &Term<'a>) -> Option<EqClassId> {
     macro_rules! func_like {
       ($tk:ident { $nr:expr, $args:expr }) => {{
         let ecs = $args.iter().map(|t| self.get(g, lc, t)).collect::<Option<Vec<_>>>()?;
@@ -1329,13 +1329,13 @@ impl EquateClass<'_> {
   }
 }
 
-impl Equate for EquateClass<'_> {
-  fn eq_class_right(&mut self, ctx: &mut EqCtx<'_>, t1: &Term, ec: EqClassId) -> bool {
+impl<'a> Equate<'a> for EquateClass<'a> {
+  fn eq_class_right(&mut self, ctx: &mut EqCtx<'a>, t1: &Term<'a>, ec: EqClassId) -> bool {
     self.get(ctx.g, ctx.lc, t1) == Some(ec)
   }
 
   fn eq_pred(
-    &mut self, ctx: &mut EqCtx<'_>, n1: PredId, n2: PredId, args1: &[Term], args2: &[Term],
+    &mut self, ctx: &mut EqCtx<'a>, n1: PredId, n2: PredId, args1: &[Term<'a>], args2: &[Term<'a>],
   ) -> bool {
     let (n1_adj, args1_adj) = Formula::adjust_pred(n1, args1, Some(&ctx.g.constrs));
     let (n2_adj, args2_adj) = Formula::adjust_pred(n2, args2, Some(&ctx.g.constrs));
@@ -1366,11 +1366,11 @@ impl Equate for EquateClass<'_> {
 }
 
 struct Similar;
-impl Equate for Similar {
-  fn eq_terms(&mut self, _: &mut EqCtx<'_>, _: &[Term], _: &[Term]) -> bool { true }
-  fn eq_term(&mut self, _: &mut EqCtx<'_>, _: &Term, _: &Term) -> bool { true }
+impl<'a> Equate<'a> for Similar {
+  fn eq_terms(&mut self, _: &mut EqCtx<'a>, _: &[Term<'a>], _: &[Term<'a>]) -> bool { true }
+  fn eq_term(&mut self, _: &mut EqCtx<'a>, _: &Term<'a>, _: &Term<'a>) -> bool { true }
 
-  fn eq_type(&mut self, ctx: &mut EqCtx<'_>, ty1: &Type, ty2: &Type) -> bool {
+  fn eq_type(&mut self, ctx: &mut EqCtx<'a>, ty1: &Type<'a>, ty2: &Type<'a>) -> bool {
     (match (&ty1.attrs.0, &ty1.attrs.1) {
       (Attrs::Inconsistent, Attrs::Inconsistent) => true,
       (Attrs::Consistent(attrs1), Attrs::Consistent(attrs2)) =>
@@ -1380,11 +1380,11 @@ impl Equate for Similar {
     }) && self.eq_radices(ctx, ty1, ty2)
   }
 
-  fn eq_attr(&mut self, _: &mut EqCtx<'_>, a1: &Attr, a2: &Attr) -> bool {
+  fn eq_attr(&mut self, _: &mut EqCtx<'a>, a1: &Attr<'a>, a2: &Attr<'a>) -> bool {
     a1.nr == a2.nr && a1.pos == a2.pos
   }
 
-  fn eq_forall(&mut self, _: &mut EqCtx<'_>, _: &Type, _: &Type, _: &Formula, _: &Formula) -> bool {
+  fn eq_forall(&mut self, _: &mut EqCtx<'a>, _: &Type<'a>, _: &Type<'a>, _: &Formula<'a>, _: &Formula<'a>) -> bool {
     false
   }
 }

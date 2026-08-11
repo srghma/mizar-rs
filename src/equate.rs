@@ -14,18 +14,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod polynomial;
 
-pub struct EqTerm {
+pub struct EqTerm<'a> {
   pub id: EqClassId,
   /// Term is EqMark(mark)
   pub mark: EqMarkId,
   pub eq_class: Vec<EqMarkId>,
-  pub ty_class: Vec<Type>,
-  pub supercluster: Attrs,
+  pub ty_class: Vec<Type<'a>>,
+  pub supercluster: Attrs<'a>,
   pub number: Option<Complex>,
   pub eq_polys: BTreeSet<Polynomial<EqTermId>>,
 }
 
-impl std::fmt::Debug for EqTerm {
+impl<'a> std::fmt::Debug for EqTerm<'a> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     write!(f, "{:?} = ", Term::EqMark(self.mark))?;
     f.debug_list()
@@ -51,14 +51,14 @@ impl<I: Idx> ConstrMap<I> {
   }
 }
 
-impl Attrs {
-  fn try_attrs(&self) -> OrUnsat<&[Attr]> {
+impl<'a> Attrs<'a> {
+  fn try_attrs(&self) -> OrUnsat<&[Attr<'a>]> {
     match self {
       Attrs::Inconsistent => Err(Unsat),
       Attrs::Consistent(attrs) => Ok(attrs),
     }
   }
-  fn try_insert(&mut self, ctx: &Constructors, lc: &LocalContext, item: Attr) -> OrUnsat<bool> {
+  fn try_insert(&mut self, ctx: &Constructors, lc: &LocalContext<'a>, item: Attr<'a>) -> OrUnsat<bool> {
     // vprintln!("insert {item:?} -> {self:?}");
     let changed = self.insert(Some(ctx), lc, item);
     self.try_attrs()?;
@@ -66,9 +66,9 @@ impl Attrs {
   }
 }
 
-struct AllowedClusters {
-  ccl: Vec<(usize, Attrs)>,
-  fcl: Vec<(usize, Attrs)>,
+struct AllowedClusters<'a> {
+  ccl: Vec<(usize, Attrs<'a>)>,
+  fcl: Vec<(usize, Attrs<'a>)>,
 }
 
 #[derive(Default)]
@@ -84,29 +84,29 @@ struct ConstrMaps {
 
 pub struct Equalizer<'a> {
   pub g: &'a Global,
-  pub lc: &'a mut LocalContext,
+  pub lc: &'a mut LocalContext<'a>,
   pub bump: &'a bumpalo::Bump,
-  reductions: &'a [Reduction],
+  reductions: &'a [Reduction<'a>],
   infers: IdxVec<InferId, Option<EqMarkId>>,
   constrs: ConstrMaps,
   /// TrmS
-  pub terms: IdxVec<EqTermId, EqTerm>,
+  pub terms: IdxVec<EqTermId, EqTerm<'a>>,
   pub next_eq_class: EqClassId,
   clash: bool,
 }
 
-impl WithGlobalLocal for Equalizer<'_> {
+impl<'a> WithGlobalLocal<'a> for Equalizer<'a> {
   fn global(&self) -> &Global { self.g }
-  fn local(&self) -> &LocalContext { self.lc }
+  fn local(&self) -> &LocalContext<'a> { self.lc }
 }
 
 struct CheckE<'a> {
-  marks: &'a IdxVec<EqMarkId, (Term, EqTermId)>,
+  marks: &'a IdxVec<EqMarkId, (Term<'a>, EqTermId)>,
   found: bool,
 }
 
 impl<'a> CheckE<'a> {
-  fn with(marks: &'a IdxVec<EqMarkId, (Term, EqTermId)>, f: impl FnOnce(&mut CheckE<'a>)) -> bool {
+  fn with(marks: &'a IdxVec<EqMarkId, (Term<'a>, EqTermId)>, f: impl FnOnce(&mut CheckE<'a>)) -> bool {
     let mut ce = CheckE { marks, found: false };
     f(&mut ce);
     ce.found
@@ -163,7 +163,7 @@ impl Equate for EqMarks {
   // EqMarks.eq_formula: EqFrms
 }
 
-impl Term {
+impl<'a> Term<'a> {
   pub fn mark(&self) -> Option<EqMarkId> {
     match *self {
       Term::EqMark(m) => Some(m),
@@ -171,7 +171,7 @@ impl Term {
     }
   }
 
-  pub fn unmark<'a>(&'a self, lc: &'a LocalContext) -> &'a Term {
+  pub fn unmark<'b>(&'b self, lc: &'b LocalContext<'a>) -> &'b Term<'a> {
     match *self {
       Term::EqMark(m) => &lc.marks[m].0,
       _ => self,
@@ -641,7 +641,7 @@ impl Visit for HasInfer<'_> {
   }
 }
 
-impl Attr {
+impl<'a> Attr<'a> {
   fn is_strict(&self, ctx: &Constructors) -> bool {
     self.pos && ctx.attribute[self.nr].properties.get(PropertyKind::Abstractness)
   }
@@ -649,14 +649,14 @@ impl Attr {
 
 struct Instantiate<'a> {
   g: &'a Global,
-  lc: &'a LocalContext,
-  terms: &'a IdxVec<EqTermId, EqTerm>,
-  subst: &'a [Type],
+  lc: &'a LocalContext<'a>,
+  terms: &'a IdxVec<EqTermId, EqTerm<'a>>,
+  subst: &'a [Type<'a>],
 }
 
-impl Instantiate<'_> {
+impl<'a> Instantiate<'a> {
   /// InstantiateTerm(fCluster = self.subst, eTrm = tgt, aTrm = src)
-  fn inst_term(&self, src: &Term, tgt: &Term) -> Dnf<LocusId, EqClassId> {
+  fn inst_term(&self, src: &Term<'a>, tgt: &Term<'a>) -> Dnf<LocusId, EqClassId> {
     // vprintln!("inst_term {:?} <- {src:?} = {tgt:?}", self.subst);
     match (tgt.unmark(self.lc), src) {
       (Term::Numeral(n), Term::Numeral(n2)) => Dnf::mk_bool(n == n2),
@@ -743,7 +743,7 @@ impl Instantiate<'_> {
     // vprintln!("inst_term {:?} -> {src:?} = {tgt:?} -> {res:?}", self.subst);
   }
 
-  fn inst_terms(&self, args1: &[Term], args2: &[Term]) -> Dnf<LocusId, EqClassId> {
+  fn inst_terms(&self, args1: &[Term<'a>], args2: &[Term<'a>]) -> Dnf<LocusId, EqClassId> {
     assert!(args1.len() == args2.len());
     let mut res = Dnf::True;
     for (a, b) in args1.iter().zip(args2) {
@@ -753,7 +753,7 @@ impl Instantiate<'_> {
   }
 
   /// InstantiateType(cCluster = self.subst, enr = et, aTyp = ty)
-  fn inst_type(&self, ty: &Type, et: EqTermId) -> Dnf<LocusId, EqClassId> {
+  fn inst_type(&self, ty: &Type<'a>, et: EqTermId) -> Dnf<LocusId, EqClassId> {
     let et = self.lc.marks[self.terms[et].mark].1;
     let mut res = Dnf::FALSE;
     match ty.kind {
@@ -812,9 +812,9 @@ fn is_empty_set(g: &Global, lc: &LocalContext, terms: &[EqMarkId]) -> bool {
   terms.iter().any(|&m| matches!(lc.marks[m].0, Term::Functor { nr, .. } if nr == empty))
 }
 
-impl Attrs {
+impl<'a> Attrs<'a> {
   fn try_enlarge_by(
-    &mut self, ctx: &Constructors, lc: &LocalContext, other: &Attrs,
+    &mut self, ctx: &Constructors, lc: &LocalContext<'a>, other: &Attrs<'a>,
   ) -> OrUnsat<bool> {
     let c = self.attrs().len();
     self.enlarge_by(ctx, lc, other);
@@ -1655,15 +1655,15 @@ impl<'a> Equalizer<'a> {
   fn depends_on(&self, etm: &EqTerm, tgt: EqTermId) -> bool {
     assert!(!self.terms[tgt].eq_class.is_empty());
     !etm.eq_class.is_empty() && {
-      struct CheckEqTerm<'a> {
-        marks: &'a IdxVec<EqMarkId, (Term, EqTermId)>,
-        terms: &'a IdxVec<EqTermId, EqTerm>,
+      struct CheckEqTerm<'b, 'c> {
+        marks: &'b IdxVec<EqMarkId, (Term<'c>, EqTermId)>,
+        terms: &'b IdxVec<EqTermId, EqTerm<'c>>,
         tgt: EqTermId,
         found: bool,
       }
-      impl Visit for CheckEqTerm<'_> {
+      impl Visit for CheckEqTerm<'_, '_> {
         fn abort(&self) -> bool { self.found }
-        fn visit_term(&mut self, tm: &Term) {
+        fn visit_term(&mut self, tm: &Term<'_>) {
           match *tm {
             Term::EqClass(_) => self.found = true,
             Term::EqMark(m) => {

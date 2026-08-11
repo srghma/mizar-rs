@@ -11,14 +11,14 @@ use std::fmt::Debug;
 const DOUBLE_CHECK: bool = false;
 
 #[derive(Default)]
-pub struct Exporter {
+pub struct Exporter<'a> {
   pub constrs_base: ConstructorsBase,
   pub clusters_base: ClustersBase,
   pub definitions_base: DefiniensId,
   pub identify_base: u32,
   pub reductions_base: u32,
   pub properties_base: u32,
-  pub theorems: Vec<Theorem>,
+  pub theorems: Vec<Theorem<'a>>,
   pub schemes: Vec<Option<SchId>>,
 }
 
@@ -39,16 +39,16 @@ fn assert_eq_iter<T: Debug + PartialEq<U>, U: Debug>(
   }
 }
 
-struct ExportPrep<'a> {
+struct ExportPrep<'a, 'b> {
   ctx: Option<&'a Constructors>,
-  lc: &'a LocalContext,
-  ic: &'a IdxVec<InferId, Assignment>,
+  lc: &'a LocalContext<'b>,
+  ic: &'a IdxVec<InferId, Assignment<'b>>,
   depth: u32,
 }
-impl VisitMut for ExportPrep<'_> {
-  fn push_bound(&mut self, _: IdentId, _: &mut Type) { self.depth += 1 }
+impl VisitMut for ExportPrep<'_, '_> {
+  fn push_bound(&mut self, _: IdentId, _: &mut Type<'_>) { self.depth += 1 }
   fn pop_bound(&mut self, n: u32) { self.depth -= n }
-  fn visit_term(&mut self, tm: &mut Term) {
+  fn visit_term(&mut self, tm: &mut Term<'_>) {
     if let Term::Infer(nr) = *tm {
       *tm = self.ic[nr].def.visit_cloned(&mut OnVarMut(|v| *v += self.depth));
     }
